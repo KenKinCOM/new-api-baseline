@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -17,8 +18,10 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	smssvc "github.com/QuantumNous/new-api/service/sms"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 
 	"github.com/QuantumNous/new-api/constant"
 
@@ -31,6 +34,12 @@ type LoginRequest struct {
 	Password          string `json:"password"`
 	PasswordEncrypted string `json:"password_encrypted"`
 	EncryptionKeyID   string `json:"encryption_key_id"`
+}
+
+type PhoneLoginRequest struct {
+	Phone            string `json:"phone"`
+	VerificationCode string `json:"verification_code"`
+	AffCode          string `json:"aff_code"`
 }
 
 func GetPasswordEncryptionKey(c *gin.Context) {
@@ -107,6 +116,8 @@ func loginMethodFromContext(c *gin.Context) string {
 	switch c.FullPath() {
 	case "/api/user/login":
 		return "password"
+	case "/api/user/phone/login":
+		return "phone"
 	case "/api/user/login/2fa":
 		return "2fa"
 	case "/api/user/passkey/login/finish":
@@ -141,6 +152,94 @@ func recordLoginAudit(user *model.User, c *gin.Context) {
 		params["verification_method"] = verifiedMethod
 	}
 	model.RecordLoginLog(user.Id, user.Role, user.Username, content, ip, "login", params, extra, c)
+}
+
+func PhoneLogin(c *gin.Context) {
+	settings := system_setting.GetSMSSettings()
+	if settings == nil || !settings.Enabled {
+		common.ApiErrorMsg(c, "SMS login is disabled")
+		return
+	}
+
+	var req PhoneLoginRequest
+	if err := json.NewDecoder(c.Request.Body).Decode(&req); err != nil {
+		common.ApiErrorT(c, "Invalid parameters")
+		return
+	}
+	phone, err := smssvc.NormalizePhone(req.Phone)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if req.VerificationCode == "" || !common.VerifyCodeWithKey(phone, req.VerificationCode, common.PhoneVerificationPurpose) {
+		common.ApiErrorT(c, "Verification code is incorrect or has expired")
+		return
+	}
+
+	user, err := findOrCreatePhoneUser(phone, req.AffCode)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if user.Status != common.UserStatusEnabled {
+		common.ApiErrorT(c, "User has been banned")
+		return
+	}
+
+	common.DeleteKey(phone, common.PhoneVerificationPurpose)
+	setupLogin(user, nil, c)
+}
+
+func findOrCreatePhoneUser(phone string, affCode string) (*model.User, error) {
+	user := &model.User{}
+	if model.IsPhoneAlreadyTaken(phone) {
+		if err := user.FillUserByPhone(phone); err != nil {
+			return nil, err
+		}
+		return user, nil
+	}
+
+	if !common.RegisterEnabled {
+		return nil, errors.New("registration is disabled")
+	}
+
+	inviterId, _ := model.GetUserIdByAffCode(affCode)
+	username, err := generatePhoneUsername()
+	if err != nil {
+		return nil, err
+	}
+	user = &model.User{
+		Username:    username,
+		DisplayName: "Phone User",
+		Phone:       phone,
+		Role:        common.RoleCommonUser,
+		Status:      common.UserStatusEnabled,
+	}
+	if err := user.Insert(inviterId); err != nil {
+		return nil, err
+	}
+	if err := user.FillUserByPhone(phone); err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+func generatePhoneUsername() (string, error) {
+	for range 10 {
+		username := "phone_" + common.GetRandomString(10)
+		exist, err := model.CheckUserExistOrDeleted(username, "")
+		if err != nil {
+			return "", err
+		}
+		if !exist {
+			return username, nil
+		}
+	}
+	username := "phone_" + strconv.Itoa(model.GetMaxUserId()+1)
+	if len(username) > model.UserNameMaxLength {
+		username = username[:model.UserNameMaxLength]
+	}
+	return username, nil
 }
 
 // setupLogin evaluates the shared login policy after primary authentication.
