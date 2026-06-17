@@ -9,13 +9,15 @@ import (
 )
 
 type verificationValue struct {
-	code string
-	time time.Time
+	code         string
+	time         time.Time
+	validMinutes int
 }
 
 const (
 	EmailVerificationPurpose = "v"
 	PasswordResetPurpose     = "r"
+	PhoneVerificationPurpose = "p"
 )
 
 var verificationMutex sync.Mutex
@@ -33,11 +35,19 @@ func GenerateVerificationCode(length int) string {
 }
 
 func RegisterVerificationCodeWithKey(key string, code string, purpose string) {
+	RegisterVerificationCodeWithKeyMinutes(key, code, purpose, VerificationValidMinutes)
+}
+
+func RegisterVerificationCodeWithKeyMinutes(key string, code string, purpose string, validMinutes int) {
+	if validMinutes <= 0 {
+		validMinutes = VerificationValidMinutes
+	}
 	verificationMutex.Lock()
 	defer verificationMutex.Unlock()
 	verificationMap[purpose+key] = verificationValue{
-		code: code,
-		time: time.Now(),
+		code:         code,
+		time:         time.Now(),
+		validMinutes: validMinutes,
 	}
 	if len(verificationMap) > verificationMapMaxSize {
 		removeExpiredPairs()
@@ -49,7 +59,11 @@ func VerifyCodeWithKey(key string, code string, purpose string) bool {
 	defer verificationMutex.Unlock()
 	value, okay := verificationMap[purpose+key]
 	now := time.Now()
-	if !okay || int(now.Sub(value.time).Seconds()) >= VerificationValidMinutes*60 {
+	validMinutes := value.validMinutes
+	if validMinutes <= 0 {
+		validMinutes = VerificationValidMinutes
+	}
+	if !okay || int(now.Sub(value.time).Seconds()) >= validMinutes*60 {
 		return false
 	}
 	return code == value.code
@@ -65,7 +79,11 @@ func DeleteKey(key string, purpose string) {
 func removeExpiredPairs() {
 	now := time.Now()
 	for key := range verificationMap {
-		if int(now.Sub(verificationMap[key].time).Seconds()) >= VerificationValidMinutes*60 {
+		validMinutes := verificationMap[key].validMinutes
+		if validMinutes <= 0 {
+			validMinutes = VerificationValidMinutes
+		}
+		if int(now.Sub(verificationMap[key].time).Seconds()) >= validMinutes*60 {
 			delete(verificationMap, key)
 		}
 	}
