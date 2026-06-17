@@ -46,6 +46,8 @@ func GetStatus(c *gin.Context) {
 	defer common.OptionMapRWMutex.RUnlock()
 
 	legalSetting := system_setting.GetLegalSettings()
+	smsSetting := system_setting.GetSMSSettings()
+	alipaySetting := system_setting.GetAlipaySettings()
 
 	data := gin.H{
 		"version":                     common.Version,
@@ -91,6 +93,10 @@ func GetStatus(c *gin.Context) {
 		"password_login_enabled":        common.PasswordLoginEnabled,
 		"password_register_enabled":     common.PasswordRegisterEnabled,
 		"default_use_auto_group":        setting.DefaultUseAutoGroup,
+		"sms_enabled":                   smsSetting.Enabled,
+		"sms_provider":                  smsSetting.Provider,
+		"alipay_oauth":                  alipaySetting.Enabled,
+		"alipay_app_id":                 alipaySetting.AppId,
 
 		"password_login_encryption_enabled": common.PasswordLoginEncryptionEnabled,
 
