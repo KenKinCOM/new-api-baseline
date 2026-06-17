@@ -20,10 +20,22 @@ func TestSMSSettingsDefaults(t *testing.T) {
 	if settings.PhoneRateLimitCount != 5 {
 		t.Fatalf("expected phone rate limit count 5, got %d", settings.PhoneRateLimitCount)
 	}
+	if settings.PhoneRateLimitWindowSeconds != 3600 {
+		t.Fatalf("expected phone rate limit window 3600 seconds, got %d", settings.PhoneRateLimitWindowSeconds)
+	}
 	if settings.IPRateLimitCount != 20 {
 		t.Fatalf("expected IP rate limit count 20, got %d", settings.IPRateLimitCount)
 	}
+	if settings.IPRateLimitWindowSeconds != 3600 {
+		t.Fatalf("expected IP rate limit window 3600 seconds, got %d", settings.IPRateLimitWindowSeconds)
+	}
 	if !settings.LocalLogEnabled {
 		t.Fatalf("expected local log provider enabled")
+	}
+}
+
+func TestGetSMSSettingsReturnsSingleton(t *testing.T) {
+	if GetSMSSettings() != &smsSettings {
+		t.Fatalf("expected GetSMSSettings to return registered singleton")
 	}
 }

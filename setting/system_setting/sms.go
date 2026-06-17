@@ -30,8 +30,8 @@ func DefaultSMSSettings() SMSSettings {
 	}
 }
 
-func GetSMSSettings() SMSSettings {
-	return smsSettings
+func GetSMSSettings() *SMSSettings {
+	return &smsSettings
 }
 
 func init() {
