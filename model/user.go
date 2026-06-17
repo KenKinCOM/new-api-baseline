@@ -1191,14 +1191,14 @@ func IsPhoneAlreadyTaken(phone string) bool {
 	if phone == "" {
 		return false
 	}
-	return DB.Unscoped().Where("phone = ?", phone).Find(&User{}).RowsAffected == 1
+	return DB.Unscoped().Where("phone = ?", phone).Find(&User{}).RowsAffected > 0
 }
 
 func IsAlipayIdAlreadyTaken(alipayId string) bool {
 	if alipayId == "" {
 		return false
 	}
-	return DB.Unscoped().Where("alipay_id = ?", alipayId).Find(&User{}).RowsAffected == 1
+	return DB.Unscoped().Where("alipay_id = ?", alipayId).Find(&User{}).RowsAffected > 0
 }
 
 func IsGitHubIdAlreadyTaken(githubId string) bool {
