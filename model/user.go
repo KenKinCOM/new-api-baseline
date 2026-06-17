@@ -86,6 +86,8 @@ type User struct {
 	Role                 int                        `json:"role" gorm:"type:int;default:1"`   // admin, common
 	Status               int                        `json:"status" gorm:"type:int;default:1"` // enabled, disabled
 	Email                string                     `json:"email" gorm:"index" validate:"max=50"`
+	Phone                string                     `json:"phone" gorm:"type:varchar(32);column:phone;uniqueIndex" validate:"max=32"`
+	AlipayId             string                     `json:"alipay_id" gorm:"column:alipay_id;index"`
 	GitHubId             string                     `json:"github_id" gorm:"column:github_id;index"`
 	DiscordId            string                     `json:"discord_id" gorm:"column:discord_id;index"`
 	OidcId               string                     `json:"oidc_id" gorm:"column:oidc_id;index"`
@@ -911,6 +913,8 @@ func (user *User) ClearBinding(bindingType string) error {
 
 	bindingColumnMap := map[string]string{
 		"email":    "email",
+		"phone":    "phone",
+		"alipay":   "alipay_id",
 		"github":   "github_id",
 		"discord":  "discord_id",
 		"oidc":     "oidc_id",
@@ -1130,6 +1134,20 @@ func (user *User) FillUserByWeChatId() error {
 	return nil
 }
 
+func (user *User) FillUserByPhone(phone string) error {
+	if phone == "" {
+		return errors.New("phone is empty")
+	}
+	return DB.Where("phone = ?", phone).First(user).Error
+}
+
+func (user *User) FillUserByAlipayId() error {
+	if user.AlipayId == "" {
+		return errors.New("Alipay id is empty")
+	}
+	return DB.Where(User{AlipayId: user.AlipayId}).First(user).Error
+}
+
 func (user *User) FillUserByTelegramId() error {
 	if user.TelegramId == "" {
 		return common.NewMessage("Telegram ID is empty!")
@@ -1167,6 +1185,20 @@ func GetUniqueUserByEmail(email string) (*User, error) {
 
 func IsWeChatIdAlreadyTaken(wechatId string) bool {
 	return DB.Unscoped().Where("wechat_id = ?", wechatId).Find(&User{}).RowsAffected == 1
+}
+
+func IsPhoneAlreadyTaken(phone string) bool {
+	if phone == "" {
+		return false
+	}
+	return DB.Unscoped().Where("phone = ?", phone).Find(&User{}).RowsAffected == 1
+}
+
+func IsAlipayIdAlreadyTaken(alipayId string) bool {
+	if alipayId == "" {
+		return false
+	}
+	return DB.Unscoped().Where("alipay_id = ?", alipayId).Find(&User{}).RowsAffected == 1
 }
 
 func IsGitHubIdAlreadyTaken(githubId string) bool {
