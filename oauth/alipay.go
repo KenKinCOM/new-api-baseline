@@ -282,6 +282,11 @@ type alipayUserInfoEnvelope struct {
 	Sign          string              `json:"sign"`
 }
 
+// ProviderUserIDColumn returns the users-table column storing this provider's user ID.
+func (p *AlipayProvider) ProviderUserIDColumn() string {
+	return "alipay_id"
+}
+
 func init() {
 	Register("alipay", &AlipayProvider{})
 }
