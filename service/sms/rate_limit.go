@@ -41,3 +41,7 @@ func (l *MemoryLimiter) Allow(key string, limit int, windowSeconds int) bool {
 	l.items[key] = item
 	return true
 }
+
+func (l *MemoryLimiter) AllowOnce(key string, windowSeconds int) bool {
+	return l.Allow(key, 1, windowSeconds)
+}

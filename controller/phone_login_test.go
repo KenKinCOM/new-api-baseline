@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -103,5 +104,39 @@ func TestPhoneLoginAutoRegistersAndLogsIn(t *testing.T) {
 	}
 	if common.VerifyCodeWithKey(phone, code, common.PhoneVerificationPurpose) {
 		t.Fatal("expected phone verification code to be consumed after login")
+	}
+}
+
+func TestPhoneLoginRejectsConcurrentReplayWithSameCode(t *testing.T) {
+	router := setupPhoneLoginRouter(t)
+	phone := "13800138002"
+	code := "123456"
+	common.RegisterVerificationCodeWithKey(phone, code, common.PhoneVerificationPurpose)
+
+	var wg sync.WaitGroup
+	results := make(chan bool, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			body := bytes.NewBufferString(`{"phone":"` + phone + `","verification_code":"` + code + `"}`)
+			req := httptest.NewRequest(http.MethodPost, "/api/user/phone/login", body)
+			req.Header.Set("Content-Type", "application/json")
+			res := httptest.NewRecorder()
+			router.ServeHTTP(res, req)
+			results <- bytes.Contains(res.Body.Bytes(), []byte(`"success":true`))
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	successCount := 0
+	for success := range results {
+		if success {
+			successCount++
+		}
+	}
+	if successCount != 1 {
+		t.Fatalf("expected exactly one successful login with a single code, got %d", successCount)
 	}
 }

@@ -42,6 +42,18 @@ type PhoneLoginRequest struct {
 	AffCode          string `json:"aff_code"`
 }
 
+type phoneLoginLockEntry struct {
+	mutex sync.Mutex
+	refs  int
+}
+
+var phoneLoginLocks = struct {
+	sync.Mutex
+	locks map[string]*phoneLoginLockEntry
+}{
+	locks: map[string]*phoneLoginLockEntry{},
+}
+
 func GetPasswordEncryptionKey(c *gin.Context) {
 	if !common.PasswordLoginEncryptionEnabled {
 		common.ApiSuccess(c, gin.H{"enabled": false})
@@ -117,7 +129,7 @@ func loginMethodFromContext(c *gin.Context) string {
 	case "/api/user/login":
 		return "password"
 	case "/api/user/phone/login":
-		return "phone"
+		return "phone_code"
 	case "/api/user/login/2fa":
 		return "2fa"
 	case "/api/user/passkey/login/finish":
@@ -171,6 +183,10 @@ func PhoneLogin(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+
+	releaseLock := acquirePhoneLoginLock(phone)
+	defer releaseLock()
+
 	if req.VerificationCode == "" || !common.VerifyCodeWithKey(phone, req.VerificationCode, common.PhoneVerificationPurpose) {
 		common.ApiErrorT(c, "Verification code is incorrect or has expired")
 		return
@@ -222,6 +238,29 @@ func findOrCreatePhoneUser(phone string, affCode string) (*model.User, error) {
 		return nil, err
 	}
 	return user, nil
+}
+
+func acquirePhoneLoginLock(phone string) func() {
+	phoneLoginLocks.Lock()
+	entry := phoneLoginLocks.locks[phone]
+	if entry == nil {
+		entry = &phoneLoginLockEntry{}
+		phoneLoginLocks.locks[phone] = entry
+	}
+	entry.refs++
+	phoneLoginLocks.Unlock()
+
+	entry.mutex.Lock()
+	return func() {
+		entry.mutex.Unlock()
+
+		phoneLoginLocks.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(phoneLoginLocks.locks, phone)
+		}
+		phoneLoginLocks.Unlock()
+	}
 }
 
 func generatePhoneUsername() (string, error) {

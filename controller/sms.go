@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	smsPhoneLimiter = smssvc.NewMemoryLimiter()
-	smsIPLimiter    = smssvc.NewMemoryLimiter()
+	smsResendLimiter = smssvc.NewMemoryLimiter()
+	smsPhoneLimiter  = smssvc.NewMemoryLimiter()
+	smsIPLimiter     = smssvc.NewMemoryLimiter()
 )
 
 type SMSVerificationRequest struct {
@@ -39,11 +40,15 @@ func SendSMSVerification(c *gin.Context) {
 		return
 	}
 
-	if !smsPhoneLimiter.Allow(phone, settings.PhoneRateLimitCount, settings.PhoneRateLimitWindowSeconds) {
+	if !smsResendLimiter.AllowOnce("resend:"+phone, settings.ResendIntervalSeconds) {
+		common.ApiErrorMsg(c, "SMS code was sent recently")
+		return
+	}
+	if !smsPhoneLimiter.Allow("phone:"+phone, settings.PhoneRateLimitCount, settings.PhoneRateLimitWindowSeconds) {
 		common.ApiErrorMsg(c, "too many SMS requests for this phone")
 		return
 	}
-	if !smsIPLimiter.Allow(c.ClientIP(), settings.IPRateLimitCount, settings.IPRateLimitWindowSeconds) {
+	if !smsIPLimiter.Allow("ip:"+c.ClientIP(), settings.IPRateLimitCount, settings.IPRateLimitWindowSeconds) {
 		common.ApiErrorMsg(c, "too many SMS requests from this IP")
 		return
 	}

@@ -17,7 +17,7 @@ func (p LocalProvider) Name() string {
 
 func (p LocalProvider) SendVerificationCode(ctx context.Context, phone string, code string) error {
 	if p.LogEnabled {
-		common.SysLog(fmt.Sprintf("[SMS local] phone=%s code=%s", MaskPhone(phone), code))
+		common.SysLog(fmt.Sprintf("[SMS local development] phone=%s code=%s", MaskPhone(phone), code))
 	}
 	return nil
 }
