@@ -23,6 +23,42 @@ func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
 	service.RegisterSystemTaskHandler(systemTaskCleanupHandler{})
+	service.RegisterSystemTaskHandler(topUpPendingCleanupHandler{})
+}
+
+// topUpPendingCleanupHandler 每小时把超期的 pending 充值单转为 expired（L2）。
+// 此前只有 Stripe 的 checkout.expired 会写 expired，其余四个通道的 pending 单
+// 会永久停在「待入账」，既污染统计也无法判断到底漏没漏单。
+type topUpPendingCleanupHandler struct{}
+
+func (topUpPendingCleanupHandler) Type() string { return model.SystemTaskTypeTopUpPendingCleanup }
+
+func (topUpPendingCleanupHandler) Enabled() bool { return true }
+
+func (topUpPendingCleanupHandler) Interval() time.Duration { return time.Hour }
+
+func (topUpPendingCleanupHandler) NewPayload() any { return nil }
+
+func (topUpPendingCleanupHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	cutoff := common.GetTimestamp() - common.TopUpPendingTimeoutSeconds
+	const batch = 200
+	var total int64
+	for {
+		if ctx.Err() != nil {
+			finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, map[string]int64{"expired_count": total}, ctx.Err())
+			return
+		}
+		n, err := model.CloseStalePendingTopUps(cutoff, batch)
+		if err != nil {
+			finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, map[string]int64{"expired_count": total}, err)
+			return
+		}
+		total += n
+		if n < batch {
+			break
+		}
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, map[string]int64{"expired_count": total}, nil)
 }
 
 // systemTaskCleanupHandler deletes, once a day, the finished system tasks

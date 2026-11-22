@@ -163,6 +163,36 @@ func SetTopUpProviderTradeNo(tradeNo string, providerTradeNo string) {
 	}
 }
 
+// topUpStatusAllowsCredit 判断该状态是否还允许入账（L2）。
+//
+// expired 只表示「超过阈值仍未收到回调」，不是终态：通道侧的钱可能已经收了，
+// 只是通知迟到。因此 expired 仍允许被一次成功回调或人工补单转成 success，
+// 幂等仍由 success 分支保证；failed 才是终态，不再允许入账。
+func topUpStatusAllowsCredit(status string) bool {
+	return status == common.TopUpStatusPending || status == common.TopUpStatusExpired
+}
+
+// CloseStalePendingTopUps 把创建时间早于 olderThan 的 pending 订单批量转为 expired（L2）。
+// 逐批按主键更新，避免 UPDATE ... LIMIT 在 PostgreSQL 上不可用。
+func CloseStalePendingTopUps(olderThan int64, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	var ids []int
+	if err := DB.Model(&TopUp{}).
+		Where("status = ? AND create_time < ?", common.TopUpStatusPending, olderThan).
+		Order("id asc").Limit(limit).Pluck("id", &ids).Error; err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	result := DB.Model(&TopUp{}).
+		Where("id IN ? AND status = ?", ids, common.TopUpStatusPending).
+		Update("status", common.TopUpStatusExpired)
+	return result.RowsAffected, result.Error
+}
+
 func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, targetStatus string) error {
 	if tradeNo == "" {
 		return errors.New("payment order number not provided")
@@ -217,7 +247,7 @@ func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (
 			alreadyDone = true
 			return nil
 		}
-		if topUp.Status != common.TopUpStatusPending {
+		if !topUpStatusAllowsCredit(topUp.Status) {
 			return ErrTopUpStatusInvalid
 		}
 		if actualPaymentMethod != "" && topUp.PaymentMethod != actualPaymentMethod {
@@ -277,7 +307,7 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 			return ErrPaymentMethodMismatch
 		}
 
-		if topUp.Status != common.TopUpStatusPending {
+		if !topUpStatusAllowsCredit(topUp.Status) {
 			return errors.New("invalid top-up order status")
 		}
 
@@ -495,7 +525,7 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 			return nil
 		}
 
-		if topUp.Status != common.TopUpStatusPending {
+		if !topUpStatusAllowsCredit(topUp.Status) {
 			return common.NewMessage("Order is not pending payment and cannot be completed")
 		}
 
@@ -567,7 +597,7 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 			return ErrPaymentMethodMismatch
 		}
 
-		if topUp.Status != common.TopUpStatusPending {
+		if !topUpStatusAllowsCredit(topUp.Status) {
 			return errors.New("invalid top-up order status")
 		}
 
@@ -644,7 +674,7 @@ func RechargeWaffo(tradeNo string, callerIp string) (err error) {
 			return nil // 幂等：已成功直接返回
 		}
 
-		if topUp.Status != common.TopUpStatusPending {
+		if !topUpStatusAllowsCredit(topUp.Status) {
 			return errors.New("invalid top-up order status")
 		}
 
@@ -705,7 +735,7 @@ func RechargeWaffoPancake(tradeNo string) (err error) {
 			return nil
 		}
 
-		if topUp.Status != common.TopUpStatusPending {
+		if !topUpStatusAllowsCredit(topUp.Status) {
 			return errors.New("invalid top-up order status")
 		}
 

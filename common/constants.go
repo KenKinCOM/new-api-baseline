@@ -280,3 +280,9 @@ const (
 	TopUpStatusFailed  = "failed"
 	TopUpStatusExpired = "expired"
 )
+
+// TopUpPendingTimeoutSeconds 是 pending 充值单的超时关闭阈值（L2）。
+// 超过该时长仍未收到回调的订单由 topup_pending_cleanup 定时任务转为 expired，
+// 退出「待入账」统计；若通道后续回调成功，仍会按 pending→success 正常入账
+// （expired 不是终态保护，回调侧只认 success 幂等）。
+const TopUpPendingTimeoutSeconds int64 = 24 * 60 * 60
