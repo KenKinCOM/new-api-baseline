@@ -298,6 +298,13 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 		logger.LogError(ctx, common.LogText("Stripe payment claim failed trade_no=%s client_ip=%s error=%q", referenceId, callerIp, claimErr.Error()))
 		return
 	}
+	// R1：本地是充值单时，回调金额必须与订单金额一致（订阅单不在 top_ups，跳过）
+	if paidCents, parseErr := strconv.ParseFloat(event.GetObjectValue("amount_total"), 64); parseErr == nil {
+		if amountErr := model.CheckTopUpPaidAmount(referenceId, paidCents/100); amountErr != nil && !errors.Is(amountErr, model.ErrTopUpNotFound) {
+			logger.LogError(ctx, common.LogText("Stripe callback amount check failed trade_no=%s amount_total=%.2f client_ip=%s error=%q", referenceId, paidCents/100, callerIp, amountErr.Error()))
+			return
+		}
+	}
 	payload := map[string]any{
 		"customer":     customerId,
 		"amount_total": event.GetObjectValue("amount_total"),

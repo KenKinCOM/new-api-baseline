@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -160,6 +161,24 @@ func IsTopUpAlreadySettled(tradeNo string) bool {
 	}
 	topUp := GetTopUpByTradeNo(tradeNo)
 	return topUp != nil && topUp.Status == common.TopUpStatusSuccess
+}
+
+// ErrTopUpAmountMismatch 表示通道回调的实付金额与本地订单金额不一致（R1）。
+var ErrTopUpAmountMismatch = errors.New("topup payment amount mismatch")
+
+// CheckTopUpPaidAmount 校验通道回调金额与本地订单金额一致（R1）。
+// 订单不存在返回 ErrTopUpNotFound（调用方据此判断是订阅单还是漏单），
+// 金额差异超过 0.01 返回 ErrTopUpAmountMismatch，调用方必须拒绝入账并告警。
+func CheckTopUpPaidAmount(tradeNo string, paidMoney float64) error {
+	topUp := GetTopUpByTradeNo(tradeNo)
+	if topUp == nil {
+		return ErrTopUpNotFound
+	}
+	if math.Abs(topUp.Money-paidMoney) > 0.01 {
+		common.SysError(common.LogText("topup payment amount mismatch trade_no=%s local_money=%.2f paid_money=%.2f provider=%s", tradeNo, topUp.Money, paidMoney, topUp.PaymentProvider))
+		return ErrTopUpAmountMismatch
+	}
+	return nil
 }
 
 // SetTopUpProviderTradeNo 记录通道侧流水号（R3）。各通道回调成功后调用，

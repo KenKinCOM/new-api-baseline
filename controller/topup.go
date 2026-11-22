@@ -470,6 +470,18 @@ func EpayNotify(c *gin.Context) {
 	logger.LogInfo(c.Request.Context(), common.LogText("Epay webhook signature verified trade_no=%s callback_type=%s trade_status=%s client_ip=%s verify_info=%q", verifyInfo.ServiceTradeNo, verifyInfo.Type, verifyInfo.TradeStatus, c.ClientIP(), common.GetJsonString(verifyInfo)))
 
 	if verifyInfo.TradeStatus == epay.StatusTradeSuccess {
+		// R1：回调金额必须与本地订单一致，不一致拒绝入账（不吞单，留证后回 fail 等人工处理）
+		paidMoney, parseErr := strconv.ParseFloat(verifyInfo.Money, 64)
+		if parseErr != nil {
+			logger.LogError(c.Request.Context(), common.LogText("Epay callback money is not parseable trade_no=%s money=%q client_ip=%s", verifyInfo.ServiceTradeNo, verifyInfo.Money, c.ClientIP()))
+			_, _ = c.Writer.Write([]byte("fail"))
+			return
+		}
+		if amountErr := model.CheckTopUpPaidAmount(verifyInfo.ServiceTradeNo, paidMoney); amountErr != nil && !errors.Is(amountErr, model.ErrTopUpNotFound) {
+			logger.LogError(c.Request.Context(), common.LogText("Epay callback amount check failed trade_no=%s paid_money=%.2f client_ip=%s error=%q", verifyInfo.ServiceTradeNo, paidMoney, c.ClientIP(), amountErr.Error()))
+			_, _ = c.Writer.Write([]byte("fail"))
+			return
+		}
 		// 进程内锁只是优化；重复/并发回调的正确性由 RechargeEpay 的
 		// 数据库行锁 + 事务内状态校验保证（多实例部署下同样安全）。
 		LockOrder(verifyInfo.ServiceTradeNo)
