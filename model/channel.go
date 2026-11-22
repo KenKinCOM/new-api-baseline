@@ -858,18 +858,72 @@ func hasEnabledMultiKey(keys []string, statusList map[int]int) bool {
 	return false
 }
 
+// ChannelAutoStatusBumpInterval is the coalescing window for automatic channel
+// status changes (auto disable after a failure, auto re-enable after a test).
+// Busy channels change key status often, and every bump reloads the whole
+// channel cache on every node, so those changes are folded into at most one
+// bump per window instead of one per change (T3 G4).
+const ChannelAutoStatusBumpInterval = 10 * time.Second
+
+// channelAutoStatusSync coalesces automatic status changes into one channel
+// topic bump per ChannelAutoStatusBumpInterval: the first change in a window
+// bumps at once, later ones schedule a single trailing bump. Other nodes then
+// pick the change up within ChannelAutoStatusBumpInterval + nodeSyncInterval
+// (13s by default) instead of waiting for the SYNC_FREQUENCY sweep (60s).
+var channelAutoStatusSync = struct {
+	mu       sync.Mutex
+	lastBump time.Time
+	pending  *time.Timer
+}{}
+
+func bumpAutoStatusSyncTopic() {
+	channelAutoStatusSync.mu.Lock()
+	now := time.Now()
+	if !channelAutoStatusSync.lastBump.IsZero() {
+		remaining := ChannelAutoStatusBumpInterval - now.Sub(channelAutoStatusSync.lastBump)
+		if remaining > 0 {
+			if channelAutoStatusSync.pending == nil {
+				channelAutoStatusSync.pending = time.AfterFunc(remaining, flushAutoStatusSyncTopic)
+			}
+			channelAutoStatusSync.mu.Unlock()
+			return
+		}
+	}
+	channelAutoStatusSync.lastBump = now
+	channelAutoStatusSync.mu.Unlock()
+	BumpSyncTopic(SyncTopicChannels)
+}
+
+func flushAutoStatusSyncTopic() {
+	channelAutoStatusSync.mu.Lock()
+	channelAutoStatusSync.pending = nil
+	channelAutoStatusSync.lastBump = time.Now()
+	channelAutoStatusSync.mu.Unlock()
+	BumpSyncTopic(SyncTopicChannels)
+}
+
 func UpdateChannelStatus(channelId int, usingKey string, status int, reason string) (changed bool) {
 	// A status set by hand names no key and is never an automatic disable; it
 	// reaches every node within seconds. An automatic change, a disable after a
-	// failure or the re-enable after a test of the key it used, is left to the
-	// periodic channel sync: the keys of busy channels change status often, and
-	// each bump reloads the whole channel cache on every node.
-	bump := usingKey == "" && status != common.ChannelStatusAutoDisabled
+	// failure or the re-enable after a test of the key it used, goes through
+	// bumpAutoStatusSyncTopic: the keys of busy channels change status often,
+	// and each bump reloads the whole channel cache on every node, so automatic
+	// changes are coalesced into one bump per ChannelAutoStatusBumpInterval.
+	manualChange := usingKey == "" && status != common.ChannelStatusAutoDisabled
+	// forceBump is set by the store callback when another node must see the
+	// change at once (the master runs a plugin's scheduled hook), bypassing the
+	// coalescing window.
+	forceBump := false
 	// Runs after the ability update deferred below.
 	defer func() {
-		if changed && bump {
-			BumpSyncTopic(SyncTopicChannels)
+		if !changed {
+			return
 		}
+		if manualChange || forceBump {
+			BumpSyncTopic(SyncTopicChannels)
+			return
+		}
+		bumpAutoStatusSyncTopic()
 	}()
 	if common.MemoryCacheEnabled {
 		channelStatusLock.Lock()
@@ -931,7 +985,7 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 		// The master runs a plugin's scheduled hook when a key is disabled
 		// automatically, so another node's disable reaches it within seconds.
 		if status == common.ChannelStatusAutoDisabled && !common.IsMasterNode && channelPluginHasHook(channel, "scheduled") {
-			bump = true
+			forceBump = true
 		}
 		// A manual channel operation must replace the exhaustion reason even
 		// when the status value is already manually disabled.

@@ -240,6 +240,14 @@ type NodeSyncNode struct {
 type NodeSyncStatus struct {
 	Topics []NodeSyncTopic `json:"topics"`
 	Nodes  []NodeSyncNode  `json:"nodes"`
+	// Declared propagation bounds in seconds: how long an automatic channel
+	// status change (auto disable / auto re-enable) may take to reach every
+	// node. They are answered from this API so the bound is checkable instead
+	// of being folklore (T3 G4). The bound excludes the whole-table reload
+	// itself, which runs on the receiving node after the bump is seen.
+	SyncIntervalSeconds        int `json:"sync_interval_seconds"`
+	AutoChangeBumpIntervalSecs int `json:"channel_auto_change_bump_interval_seconds"`
+	AutoChangeBoundSeconds     int `json:"channel_auto_change_bound_seconds"`
 }
 
 // systemInstanceSyncStates reads what a node's registry row says it applied.
@@ -288,7 +296,13 @@ func GetNodeSyncStatus() (NodeSyncStatus, error) {
 		return NodeSyncStatus{}, err
 	}
 
-	status := NodeSyncStatus{Topics: make([]NodeSyncTopic, 0, len(topics)), Nodes: make([]NodeSyncNode, 0, len(instances))}
+	status := NodeSyncStatus{
+		Topics:                     make([]NodeSyncTopic, 0, len(topics)),
+		Nodes:                      make([]NodeSyncNode, 0, len(instances)),
+		SyncIntervalSeconds:        int(nodeSyncInterval / time.Second),
+		AutoChangeBumpIntervalSecs: int(model.ChannelAutoStatusBumpInterval / time.Second),
+	}
+	status.AutoChangeBoundSeconds = status.AutoChangeBumpIntervalSecs + status.SyncIntervalSeconds
 	for _, topic := range topics {
 		item := NodeSyncTopic{Topic: topic}
 		if task := newest[model.SyncTaskType(topic)]; task != nil {
