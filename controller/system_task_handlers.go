@@ -23,6 +23,73 @@ func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
 	service.RegisterSystemTaskHandler(systemTaskCleanupHandler{})
+	service.RegisterSystemTaskHandler(topUpPendingCleanupHandler{})
+	service.RegisterSystemTaskHandler(topUpReconcileHandler{})
+}
+
+// topUpReconcileHandler 每日对「前一个自然日」做充值三方对账（R6）：
+// 成功订单的 credited_quota、额度流水 delta、充值日志 quota 三者比对，
+// 差异写入 topup_reconcile_diffs；无差异时不产任何行。
+type topUpReconcileHandler struct{}
+
+func (topUpReconcileHandler) Type() string { return model.SystemTaskTypeTopUpReconcile }
+
+func (topUpReconcileHandler) Enabled() bool { return true }
+
+func (topUpReconcileHandler) Interval() time.Duration { return 24 * time.Hour }
+
+func (topUpReconcileHandler) NewPayload() any { return nil }
+
+func (topUpReconcileHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	if ctx.Err() != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, ctx.Err())
+		return
+	}
+	now := time.Now()
+	endOfYesterday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
+	startOfYesterday := endOfYesterday - 24*60*60
+	runDate := model.TopUpReconcileRunDate(startOfYesterday)
+	summary, err := model.RunTopUpReconcile(runDate, startOfYesterday, endOfYesterday-1)
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, summary, err)
+		return
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
+}
+
+// topUpPendingCleanupHandler 每小时把超期的 pending 充值单转为 expired（L2）。
+// 此前只有 Stripe 的 checkout.expired 会写 expired，其余四个通道的 pending 单
+// 会永久停在「待入账」，既污染统计也无法判断到底漏没漏单。
+type topUpPendingCleanupHandler struct{}
+
+func (topUpPendingCleanupHandler) Type() string { return model.SystemTaskTypeTopUpPendingCleanup }
+
+func (topUpPendingCleanupHandler) Enabled() bool { return true }
+
+func (topUpPendingCleanupHandler) Interval() time.Duration { return time.Hour }
+
+func (topUpPendingCleanupHandler) NewPayload() any { return nil }
+
+func (topUpPendingCleanupHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	cutoff := common.GetTimestamp() - common.TopUpPendingTimeoutSeconds
+	const batch = 200
+	var total int64
+	for {
+		if ctx.Err() != nil {
+			finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, map[string]int64{"expired_count": total}, ctx.Err())
+			return
+		}
+		n, err := model.CloseStalePendingTopUps(cutoff, batch)
+		if err != nil {
+			finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, map[string]int64{"expired_count": total}, err)
+			return
+		}
+		total += n
+		if n < batch {
+			break
+		}
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, map[string]int64{"expired_count": total}, nil)
 }
 
 // systemTaskCleanupHandler deletes, once a day, the finished system tasks

@@ -250,7 +250,10 @@ func RecordOperationAuditLog(logUserId, actorRole int, content string, ip string
 	RecordAuditLog(c, AuditLog{UserId: logUserId, Username: username, ActorRole: actorRole, Category: category, Action: action, Content: content, Ip: ip, Status: status, Success: success, Other: other})
 }
 
-func RecordTopupLog(userId int, content *common.Message, callerIp string, paymentMethod string, callbackPaymentMethod string) {
+// RecordTopupLog 写入充值日志（type=1）。quota 为本次实际入账额度（R2）：
+// 此前该函数不设 Quota 字段，导致 logs.quota 恒为 0，充值总额无法按类型汇总。
+// 金额同时写入 other.quota_raw，便于与 top_ups.credited_quota 逐笔核对。
+func RecordTopupLog(userId int, content *common.Message, callerIp string, paymentMethod string, callbackPaymentMethod string, quota int) {
 	username, _ := GetUsernameById(userId, false)
 	other := NewLogOther()
 	other.MergeAdmin(map[string]any{
@@ -260,6 +263,7 @@ func RecordTopupLog(userId int, content *common.Message, callerIp string, paymen
 		"payment_method":          paymentMethod,
 		"callback_payment_method": callbackPaymentMethod,
 		"version":                 common.Version,
+		"quota_raw":               quota,
 	})
 	log := &Log{
 		UserId:    userId,
@@ -267,6 +271,7 @@ func RecordTopupLog(userId int, content *common.Message, callerIp string, paymen
 		CreatedAt: common.GetTimestamp(),
 		Type:      LogTypeTopup,
 		Content:   other.setContent([]*common.Message{content}),
+		Quota:     quota,
 		Ip:        callerIp,
 		Other:     other.JSONString(),
 	}
@@ -765,7 +770,14 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 		rpmTpmQuery = rpmTpmQuery.Where(logGroupCol+" = ?", group)
 	}
 
-	tx = tx.Where("type = ?", LogTypeConsume)
+	// R8：额度汇总口径按调用方传入的日志类型统计（type=1 即充值）。
+	// 此前写死 LogTypeConsume，传 type=1 也无效，充值总额无法按类型汇总。
+	// 传 0 保持旧行为（只统计消费）。rpm/tpm 只在消费语义下有意义，始终按消费统计。
+	effectiveLogType := LogTypeConsume
+	if logType != 0 {
+		effectiveLogType = logType
+	}
+	tx = tx.Where("type = ?", effectiveLogType)
 	rpmTpmQuery = rpmTpmQuery.Where("type = ?", LogTypeConsume)
 
 	// 只统计最近60秒的rpm和tpm

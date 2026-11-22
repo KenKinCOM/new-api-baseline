@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -485,6 +486,25 @@ func WaffoPancakeWebhook(c *gin.Context) {
 	rawTradeNo := strings.TrimSpace(event.Data.OrderMerchantExternalID)
 	isSubscription := strings.HasPrefix(rawTradeNo, "WAFFO_PANCAKE_SUB-")
 
+	// R4：先落回调证据（原始 body + X-Waffo-Signature + 来源 IP）
+	pancakeOutcome := model.WebhookOutcomeIgnored
+	pancakeRec := newWebhookRecorder(c, model.PaymentProviderWaffoPancake, bodyBytes, signature)
+	pancakeRec.markVerified(true)
+	pancakeRec.setTradeNo(rawTradeNo)
+	defer func() { pancakeRec.finish(pancakeOutcome, "") }()
+
+	// C1：先按通道侧订单号 ORD_* 做跨表认领，同一笔支付不允许既算订阅又算充值
+	if claimErr := model.ClaimPaymentTradeNo(model.PaymentProviderWaffoPancake, event.Data.OrderID, rawTradeNo, "auto"); claimErr != nil {
+		if errors.Is(claimErr, model.ErrPaymentTradeNoConflict) {
+			logger.LogWarn(c.Request.Context(), common.LogText("Waffo Pancake payment already claimed by another order, skipped trade_no=%s order_id=%s", rawTradeNo, event.Data.OrderID))
+			c.String(http.StatusOK, "OK")
+			return
+		}
+		logger.LogError(c.Request.Context(), common.LogText("Waffo Pancake payment claim failed trade_no=%s order_id=%s error=%q", rawTradeNo, event.Data.OrderID, claimErr.Error()))
+		c.String(http.StatusInternalServerError, "retry")
+		return
+	}
+
 	if isSubscription {
 		tradeNo, err := service.ResolveWaffoPancakeSubscriptionTradeNo(event)
 		if err != nil {
@@ -502,6 +522,7 @@ func WaffoPancakeWebhook(c *gin.Context) {
 			c.String(http.StatusInternalServerError, "retry")
 			return
 		}
+		pancakeOutcome = model.WebhookOutcomeCredited
 		logger.LogInfo(c.Request.Context(), common.LogText("Waffo Pancake subscription completed trade_no=%s event_id=%s order_id=%s client_ip=%s", tradeNo, event.ID, event.Data.OrderID, c.ClientIP()))
 		c.String(http.StatusOK, "OK")
 		return
@@ -524,11 +545,20 @@ func WaffoPancakeWebhook(c *gin.Context) {
 	defer UnlockOrder(tradeNo)
 
 	if err := model.RechargeWaffoPancake(tradeNo); err != nil {
+		// C2：已入账成功的订单重复回调统一回 200，不再要求通道反复重试
+		if model.IsTopUpAlreadySettled(tradeNo) {
+			logger.LogInfo(c.Request.Context(), common.LogText("Waffo Pancake duplicate callback on settled order, answered OK trade_no=%s order_id=%s", tradeNo, event.Data.OrderID))
+			c.String(http.StatusOK, "OK")
+			return
+		}
 		logger.LogError(c.Request.Context(), common.LogText("Waffo Pancake top-up processing failed trade_no=%s event_id=%s order_id=%s client_ip=%s error=%q", tradeNo, event.ID, event.Data.OrderID, c.ClientIP(), err.Error()))
 		c.String(http.StatusInternalServerError, "retry")
 		return
 	}
 
+	// R3：记录通道侧订单号 ORD_*
+	model.SetTopUpProviderTradeNo(tradeNo, event.Data.OrderID)
+	pancakeOutcome = model.WebhookOutcomeCredited
 	logger.LogInfo(c.Request.Context(), common.LogText("Waffo Pancake top-up succeeded trade_no=%s event_id=%s order_id=%s client_ip=%s", tradeNo, event.ID, event.Data.OrderID, c.ClientIP()))
 	c.String(http.StatusOK, "OK")
 }

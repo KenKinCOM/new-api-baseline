@@ -268,6 +268,12 @@ func CreemWebhook(c *gin.Context) {
 
 	logger.LogInfo(c.Request.Context(), common.LogText("Creem webhook signature verified path=%q client_ip=%s", c.Request.RequestURI, c.ClientIP()))
 
+	// R4：先落回调证据，处理结果在分发结束时回填
+	creemOutcome := model.WebhookOutcomeRejected
+	creemRec := newWebhookRecorder(c, model.PaymentProviderCreem, bodyBytes, signature)
+	defer func() { creemRec.finish(creemOutcome, "") }()
+	creemRec.markVerified(true)
+
 	// 重新设置body供后续的ShouldBindJSON使用
 	c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
@@ -280,12 +286,15 @@ func CreemWebhook(c *gin.Context) {
 	}
 
 	logger.LogInfo(c.Request.Context(), common.LogText("Creem webhook parsed event_type=%s event_id=%s request_id=%s order_id=%s order_status=%s", webhookEvent.EventType, webhookEvent.Id, webhookEvent.Object.RequestId, webhookEvent.Object.Order.Id, webhookEvent.Object.Order.Status))
+	creemRec.setTradeNo(webhookEvent.Object.RequestId)
 
 	// 根据事件类型处理不同的webhook
 	switch webhookEvent.EventType {
 	case "checkout.completed":
 		handleCheckoutCompleted(c, &webhookEvent)
+		creemOutcome = model.WebhookOutcomeCredited
 	default:
+		creemOutcome = model.WebhookOutcomeIgnored
 		logger.LogInfo(c.Request.Context(), common.LogText("Creem webhook ignored event event_type=%s event_id=%s", webhookEvent.EventType, webhookEvent.Id))
 		c.Status(http.StatusOK)
 	}
@@ -305,6 +314,18 @@ func handleCheckoutCompleted(c *gin.Context, event *CreemWebhookEvent) {
 	if referenceId == "" {
 		logger.LogWarn(c.Request.Context(), common.LogText("Creem webhook missing request_id event_id=%s order_id=%s", event.Id, event.Object.Order.Id))
 		c.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
+
+	// C1：先按通道侧订单号做跨表认领，同一笔支付不允许既算订阅又算充值
+	if claimErr := model.ClaimPaymentTradeNo(model.PaymentProviderCreem, event.Object.Order.Id, referenceId, "auto"); claimErr != nil {
+		if errors.Is(claimErr, model.ErrPaymentTradeNoConflict) {
+			logger.LogWarn(c.Request.Context(), common.LogText("Creem payment already claimed by another order, skipped trade_no=%s creem_order_id=%s", referenceId, event.Object.Order.Id))
+			c.Status(http.StatusOK)
+			return
+		}
+		logger.LogError(c.Request.Context(), common.LogText("Creem payment claim failed trade_no=%s creem_order_id=%s error=%q", referenceId, event.Object.Order.Id, claimErr.Error()))
+		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 
@@ -363,6 +384,8 @@ func handleCheckoutCompleted(c *gin.Context, event *CreemWebhookEvent) {
 		return
 	}
 
+	// R3：记录通道侧订单号（此前只在日志里）
+	model.SetTopUpProviderTradeNo(referenceId, event.Object.Order.Id)
 	logger.LogInfo(c.Request.Context(), common.LogText("Creem top-up succeeded trade_no=%s creem_order_id=%s quota=%d money=%.2f client_ip=%s", referenceId, event.Object.Order.Id, topUp.Amount, topUp.Money, c.ClientIP()))
 	c.Status(http.StatusOK)
 }

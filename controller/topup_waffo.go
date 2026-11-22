@@ -383,9 +383,18 @@ func WaffoWebhook(c *gin.Context) {
 			return
 		}
 		logger.LogInfo(c.Request.Context(), common.LogText("Waffo webhook verified and parsed event_type=%s merchant_order_id=%s order_status=%s client_ip=%s", event.EventType, payload.Result.MerchantOrderID, payload.Result.OrderStatus, c.ClientIP()))
+		// R4：验签通过后落回调证据，单号取商户订单号
+		waffoOutcome := model.WebhookOutcomeCredited
+		waffoRec := newWebhookRecorder(c, model.PaymentProviderWaffo, bodyBytes, signature)
+		waffoRec.markVerified(true)
+		waffoRec.setTradeNo(payload.Result.MerchantOrderID)
+		defer func() { waffoRec.finish(waffoOutcome, "") }()
 		handleWaffoPayment(c, wh, &payload.Result.PaymentNotificationResult)
 	default:
 		logger.LogInfo(c.Request.Context(), common.LogText("Waffo webhook ignored event event_type=%s client_ip=%s", event.EventType, c.ClientIP()))
+		waffoIgnored := newWebhookRecorder(c, model.PaymentProviderWaffo, bodyBytes, signature)
+		waffoIgnored.markVerified(true)
+		waffoIgnored.finish(model.WebhookOutcomeIgnored, "")
 		sendWaffoWebhookResponse(c, wh, true, "")
 	}
 }
@@ -412,11 +421,23 @@ func handleWaffoPayment(c *gin.Context, wh *core.WebhookHandler, result *core.Pa
 	defer UnlockOrder(merchantOrderId)
 
 	if err := model.RechargeWaffo(merchantOrderId, c.ClientIP()); err != nil {
+		// C2：已入账成功的订单重复回调统一回成功，避免通道无限重试
+		if model.IsTopUpAlreadySettled(merchantOrderId) {
+			logger.LogInfo(c.Request.Context(), common.LogText("Waffo duplicate callback on settled order, answered success trade_no=%s client_ip=%s", merchantOrderId, c.ClientIP()))
+			sendWaffoWebhookResponse(c, wh, true, "")
+			return
+		}
 		logger.LogError(c.Request.Context(), common.LogText("Waffo top-up processing failed trade_no=%s client_ip=%s error=%q", merchantOrderId, c.ClientIP(), err.Error()))
 		sendWaffoWebhookResponse(c, wh, false, err.Error())
 		return
 	}
 
+	// R3：记录通道侧流水号（收单订单号优先，回落支付请求号）
+	providerTradeNo := result.AcquiringOrderID
+	if providerTradeNo == "" {
+		providerTradeNo = result.PaymentRequestID
+	}
+	model.SetTopUpProviderTradeNo(merchantOrderId, providerTradeNo)
 	logger.LogInfo(c.Request.Context(), common.LogText("Waffo top-up succeeded trade_no=%s client_ip=%s", merchantOrderId, c.ClientIP()))
 	sendWaffoWebhookResponse(c, wh, true, "")
 }

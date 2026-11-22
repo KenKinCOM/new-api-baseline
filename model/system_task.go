@@ -26,6 +26,10 @@ const (
 	SystemTaskTypeAsyncTaskPoll  = "async_task_poll"
 	SystemTaskTypeChannelBalance = "channel_balance"
 	SystemTaskTypeCleanup        = "system_task_cleanup"
+	// L2：pending 充值单超时关闭
+	SystemTaskTypeTopUpPendingCleanup = "topup_pending_cleanup"
+	// R6：充值/入账/流水三方日终对账
+	SystemTaskTypeTopUpReconcile = "topup_reconcile"
 
 	systemTaskCleanupBatchSize = 500
 )

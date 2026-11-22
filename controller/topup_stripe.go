@@ -178,6 +178,10 @@ func StripeWebhook(c *gin.Context) {
 
 	signature := c.GetHeader("Stripe-Signature")
 	logger.LogInfo(ctx, common.LogText("Stripe webhook received request path=%q client_ip=%s signature=%q body=%q", c.Request.RequestURI, c.ClientIP(), signature, string(payload)))
+	// R4：先落回调证据，处理结果在分发结束时回填
+	stripeOutcome := model.WebhookOutcomeIgnored
+	stripeRec := newWebhookRecorder(c, model.PaymentProviderStripe, payload, signature)
+	defer func() { stripeRec.finish(stripeOutcome, "") }()
 	event, err := webhook.ConstructEventWithOptions(payload, signature, setting.StripeWebhookSecret, webhook.ConstructEventOptions{
 		IgnoreAPIVersionMismatch: true,
 	})
@@ -189,13 +193,17 @@ func StripeWebhook(c *gin.Context) {
 	}
 
 	callerIp := c.ClientIP()
+	stripeRec.markVerified(true)
+	stripeRec.setTradeNo(event.GetObjectValue("client_reference_id"))
 	logger.LogInfo(ctx, common.LogText("Stripe webhook signature verified event_type=%s client_ip=%s path=%q", string(event.Type), callerIp, c.Request.RequestURI))
 	switch event.Type {
 	case stripe.EventTypeCheckoutSessionCompleted:
+		stripeOutcome = model.WebhookOutcomeCredited
 		sessionCompleted(ctx, event, callerIp)
 	case stripe.EventTypeCheckoutSessionExpired:
 		sessionExpired(ctx, event)
 	case stripe.EventTypeCheckoutSessionAsyncPaymentSucceeded:
+		stripeOutcome = model.WebhookOutcomeCredited
 		sessionAsyncPaymentSucceeded(ctx, event, callerIp)
 	case stripe.EventTypeCheckoutSessionAsyncPaymentFailed:
 		sessionAsyncPaymentFailed(ctx, event, callerIp)
@@ -272,6 +280,14 @@ func sessionAsyncPaymentFailed(ctx context.Context, event stripe.Event, callerIp
 	logger.LogInfo(ctx, common.LogText("Stripe top-up order marked as failed trade_no=%s client_ip=%s", referenceId, callerIp))
 }
 
+// stripeProviderTradeNo 取通道侧支付号：优先 payment_intent，回落 checkout session id。
+func stripeProviderTradeNo(event stripe.Event) string {
+	if providerTradeNo := event.GetObjectValue("payment_intent"); providerTradeNo != "" {
+		return providerTradeNo
+	}
+	return event.GetObjectValue("id")
+}
+
 // fulfillOrder is the shared logic for crediting quota after payment is confirmed.
 func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, customerId string, callerIp string) {
 	if len(referenceId) == 0 {
@@ -281,6 +297,22 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 
 	LockOrder(referenceId)
 	defer UnlockOrder(referenceId)
+	// C1：先按通道侧支付号做跨表认领，同一笔支付不允许既算订阅又算充值
+	if claimErr := model.ClaimPaymentTradeNo(model.PaymentProviderStripe, stripeProviderTradeNo(event), referenceId, "auto"); claimErr != nil {
+		if errors.Is(claimErr, model.ErrPaymentTradeNoConflict) {
+			logger.LogWarn(ctx, common.LogText("Stripe payment already claimed by another order, skipped trade_no=%s client_ip=%s", referenceId, callerIp))
+			return
+		}
+		logger.LogError(ctx, common.LogText("Stripe payment claim failed trade_no=%s client_ip=%s error=%q", referenceId, callerIp, claimErr.Error()))
+		return
+	}
+	// R1：本地是充值单时，回调金额必须与订单金额一致（订阅单不在 top_ups，跳过）
+	if paidCents, parseErr := strconv.ParseFloat(event.GetObjectValue("amount_total"), 64); parseErr == nil {
+		if amountErr := model.CheckTopUpPaidAmount(referenceId, paidCents/100); amountErr != nil && !errors.Is(amountErr, model.ErrTopUpNotFound) {
+			logger.LogError(ctx, common.LogText("Stripe callback amount check failed trade_no=%s amount_total=%.2f client_ip=%s error=%q", referenceId, paidCents/100, callerIp, amountErr.Error()))
+			return
+		}
+	}
 	payload := map[string]any{
 		"customer":     customerId,
 		"amount_total": event.GetObjectValue("amount_total"),
@@ -300,6 +332,13 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 		logger.LogError(ctx, common.LogText("Stripe top-up processing failed trade_no=%s event_type=%s client_ip=%s error=%q", referenceId, string(event.Type), callerIp, err.Error()))
 		return
 	}
+
+	// R3：记录通道侧流水号（优先 payment_intent，回落 checkout session id）
+	providerTradeNo := event.GetObjectValue("payment_intent")
+	if providerTradeNo == "" {
+		providerTradeNo = event.GetObjectValue("id")
+	}
+	model.SetTopUpProviderTradeNo(referenceId, providerTradeNo)
 
 	total, _ := strconv.ParseFloat(event.GetObjectValue("amount_total"), 64)
 	currency := strings.ToUpper(event.GetObjectValue("currency"))

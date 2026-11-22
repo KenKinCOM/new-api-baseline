@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -455,6 +456,10 @@ func EpayNotify(c *gin.Context) {
 		}
 		return
 	}
+	// R4：先落回调证据（原始参数+来源 IP+签名串），再验签与处理
+	epayOutcome := model.WebhookOutcomeRejected
+	epayRec := newWebhookRecorder(c, model.PaymentProviderEpay, []byte(common.GetJsonString(params)), params["sign"])
+	defer func() { epayRec.finish(epayOutcome, "") }()
 	verifyInfo, err := client.Verify(params)
 	if err != nil || !verifyInfo.VerifyStatus {
 		if _, writeErr := c.Writer.Write([]byte("fail")); writeErr != nil {
@@ -468,8 +473,22 @@ func EpayNotify(c *gin.Context) {
 		return
 	}
 	logger.LogInfo(c.Request.Context(), common.LogText("Epay webhook signature verified trade_no=%s callback_type=%s trade_status=%s client_ip=%s verify_info=%q", verifyInfo.ServiceTradeNo, verifyInfo.Type, verifyInfo.TradeStatus, c.ClientIP(), common.GetJsonString(verifyInfo)))
+	epayRec.markVerified(true)
+	epayRec.setTradeNo(verifyInfo.ServiceTradeNo)
 
 	if verifyInfo.TradeStatus == epay.StatusTradeSuccess {
+		// R1：回调金额必须与本地订单一致，不一致拒绝入账（不吞单，留证后回 fail 等人工处理）
+		paidMoney, parseErr := strconv.ParseFloat(verifyInfo.Money, 64)
+		if parseErr != nil {
+			logger.LogError(c.Request.Context(), common.LogText("Epay callback money is not parseable trade_no=%s money=%q client_ip=%s", verifyInfo.ServiceTradeNo, verifyInfo.Money, c.ClientIP()))
+			_, _ = c.Writer.Write([]byte("fail"))
+			return
+		}
+		if amountErr := model.CheckTopUpPaidAmount(verifyInfo.ServiceTradeNo, paidMoney); amountErr != nil && !errors.Is(amountErr, model.ErrTopUpNotFound) {
+			logger.LogError(c.Request.Context(), common.LogText("Epay callback amount check failed trade_no=%s paid_money=%.2f client_ip=%s error=%q", verifyInfo.ServiceTradeNo, paidMoney, c.ClientIP(), amountErr.Error()))
+			_, _ = c.Writer.Write([]byte("fail"))
+			return
+		}
 		// 进程内锁只是优化；重复/并发回调的正确性由 RechargeEpay 的
 		// 数据库行锁 + 事务内状态校验保证（多实例部署下同样安全）。
 		LockOrder(verifyInfo.ServiceTradeNo)
@@ -486,6 +505,12 @@ func EpayNotify(c *gin.Context) {
 			default:
 				logger.LogError(c.Request.Context(), common.LogText("Epay top-up processing failed trade_no=%s client_ip=%s error=%q", verifyInfo.ServiceTradeNo, c.ClientIP(), err.Error()))
 			}
+			// C2：已入账成功的订单重复回调统一回 success，避免通道无限重试
+			if model.IsTopUpAlreadySettled(verifyInfo.ServiceTradeNo) {
+				logger.LogInfo(c.Request.Context(), common.LogText("Epay duplicate callback on settled order, answered success trade_no=%s client_ip=%s", verifyInfo.ServiceTradeNo, c.ClientIP()))
+				_, _ = c.Writer.Write([]byte("success"))
+				return
+			}
 			if _, writeErr := c.Writer.Write([]byte("fail")); writeErr != nil {
 				logger.LogError(c.Request.Context(), common.LogText("Epay webhook failed to write response trade_no=%s client_ip=%s error=%q", verifyInfo.ServiceTradeNo, c.ClientIP(), writeErr.Error()))
 			}
@@ -494,9 +519,13 @@ func EpayNotify(c *gin.Context) {
 		if alreadyDone {
 			logger.LogInfo(c.Request.Context(), common.LogText("Epay duplicate callback ignored trade_no=%s callback_type=%s client_ip=%s", verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP()))
 		} else {
+			// R3：记录通道侧流水号（易支付订单号），供与通道后台逐笔对号
+			model.SetTopUpProviderTradeNo(verifyInfo.ServiceTradeNo, verifyInfo.TradeNo)
+			epayOutcome = model.WebhookOutcomeCredited
 			logger.LogInfo(c.Request.Context(), common.LogText("Epay top-up succeeded trade_no=%s callback_type=%s client_ip=%s", verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP()))
 		}
 	} else {
+		epayOutcome = model.WebhookOutcomeIgnored
 		logger.LogInfo(c.Request.Context(), common.LogText("Epay webhook ignored event trade_no=%s callback_type=%s trade_status=%s client_ip=%s verify_info=%q", verifyInfo.ServiceTradeNo, verifyInfo.Type, verifyInfo.TradeStatus, c.ClientIP(), common.GetJsonString(verifyInfo)))
 	}
 	if _, writeErr := c.Writer.Write([]byte("success")); writeErr != nil {
@@ -583,8 +612,28 @@ func GetAllTopUps(c *gin.Context) {
 	common.ApiSuccess(c, pageInfo)
 }
 
+// ListTopUpWebhookEvents 按订单号列出全部回调事件（C3：重复入账举证）。
+// 争议时可直接看到同一单号被回调了几次、每次的原始 body、验签结果、来源 IP 与处理结果。
+func ListTopUpWebhookEvents(c *gin.Context) {
+	tradeNo := strings.TrimSpace(c.Query("trade_no"))
+	if tradeNo == "" {
+		common.ApiErrorT(c, "Invalid parameters")
+		return
+	}
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	events, err := model.GetWebhookEventsByTradeNo(tradeNo, limit)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, events)
+}
+
 type AdminCompleteTopupRequest struct {
 	TradeNo string `json:"trade_no"`
+	// ProviderTradeNo 通道侧流水号（L3）。订单上已记录过则可省略，
+	// 都没有的补单会被拒绝，避免补出无法与通道对号的账。
+	ProviderTradeNo string `json:"provider_trade_no"`
 }
 
 // AdminCompleteTopUp 管理员补单接口
@@ -595,13 +644,34 @@ func AdminCompleteTopUp(c *gin.Context) {
 		return
 	}
 
+	// L3：每次补单写一条操作审计，谁在什么时候补了哪一单
+	params := map[string]any{
+		"trade_no":          req.TradeNo,
+		"provider_trade_no": req.ProviderTradeNo,
+		"method":            c.Request.Method,
+		"route":             c.FullPath(),
+	}
+	success := false
+	defer func() {
+		content := "Manually completed top-up order"
+		if !success {
+			content = "Failed to manually complete top-up order"
+		}
+		model.RecordOperationAuditLog(c.GetInt("id"), c.GetInt("role"), content, c.ClientIP(), "topup.manual_complete", params,
+			auditOperatorInfo(c), &model.AuditRequestInfo{
+				Method: c.Request.Method, Route: c.FullPath(), Status: c.Writer.Status(), Success: success,
+			}, c)
+		markAuditLogged(c)
+	}()
+
 	// 订单级互斥，防止并发补单
 	LockOrder(req.TradeNo)
 	defer UnlockOrder(req.TradeNo)
 
-	if err := model.ManualCompleteTopUp(req.TradeNo, c.ClientIP()); err != nil {
+	if err := model.ManualCompleteTopUp(req.TradeNo, req.ProviderTradeNo, c.ClientIP()); err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	success = true
 	common.ApiSuccess(c, nil)
 }

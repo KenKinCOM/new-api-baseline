@@ -619,6 +619,11 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 		return err
 	}
 
+	// R7：返利转余额此前不写任何记录，余额变动无法追溯
+	if err := recordQuotaLedgerInTx(tx, user.Id, int64(quota), QuotaLedgerTypeAffTransfer, "aff_transfer", "", ""); err != nil {
+		return err
+	}
+
 	// 提交事务
 	return tx.Commit().Error
 }
