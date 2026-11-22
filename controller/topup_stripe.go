@@ -301,6 +301,13 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 		return
 	}
 
+	// R3：记录通道侧流水号（优先 payment_intent，回落 checkout session id）
+	providerTradeNo := event.GetObjectValue("payment_intent")
+	if providerTradeNo == "" {
+		providerTradeNo = event.GetObjectValue("id")
+	}
+	model.SetTopUpProviderTradeNo(referenceId, providerTradeNo)
+
 	total, _ := strconv.ParseFloat(event.GetObjectValue("amount_total"), 64)
 	currency := strings.ToUpper(event.GetObjectValue("currency"))
 	logger.LogInfo(ctx, common.LogText("Stripe top-up succeeded trade_no=%s amount_total=%.2f currency=%s event_type=%s client_ip=%s", referenceId, total/100, currency, string(event.Type), callerIp))

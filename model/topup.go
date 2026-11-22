@@ -26,6 +26,9 @@ type TopUp struct {
 	// CreditedQuota 记录本次订单实际入账到 users.quota 的额度（A6）。
 	// 落库快照，事后可从订单表自证入账数，不必回算 QuotaPerUnit 与组倍率。
 	CreditedQuota int64 `json:"credited_quota" gorm:"default:0"`
+	// ProviderTradeNo 通道侧流水号（R3）。此前只有本地 trade_no，Creem 等
+	// 通道侧订单号仅出现在滚动日志里，无法与通道后台逐笔对号。
+	ProviderTradeNo string `json:"provider_trade_no" gorm:"type:varchar(255);default:'';index"`
 }
 
 const (
@@ -144,6 +147,18 @@ func GetTopUpByTradeNo(tradeNo string) *TopUp {
 		return nil
 	}
 	return topUp
+}
+
+// SetTopUpProviderTradeNo 记录通道侧流水号（R3）。各通道回调成功后调用，
+// 用于与通道后台逐笔对号。只更新元数据，写失败仅记日志，不影响入账结果。
+func SetTopUpProviderTradeNo(tradeNo string, providerTradeNo string) {
+	if tradeNo == "" || providerTradeNo == "" {
+		return
+	}
+	if err := DB.Model(&TopUp{}).Where("trade_no = ?", tradeNo).
+		Update("provider_trade_no", providerTradeNo).Error; err != nil {
+		common.SysError(common.LogText("failed to record provider trade no trade_no=%s provider_trade_no=%s: %s", tradeNo, providerTradeNo, err.Error()))
+	}
 }
 
 func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, targetStatus string) error {

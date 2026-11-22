@@ -417,6 +417,12 @@ func handleWaffoPayment(c *gin.Context, wh *core.WebhookHandler, result *core.Pa
 		return
 	}
 
+	// R3：记录通道侧流水号（收单订单号优先，回落支付请求号）
+	providerTradeNo := result.AcquiringOrderID
+	if providerTradeNo == "" {
+		providerTradeNo = result.PaymentRequestID
+	}
+	model.SetTopUpProviderTradeNo(merchantOrderId, providerTradeNo)
 	logger.LogInfo(c.Request.Context(), common.LogText("Waffo top-up succeeded trade_no=%s client_ip=%s", merchantOrderId, c.ClientIP()))
 	sendWaffoWebhookResponse(c, wh, true, "")
 }

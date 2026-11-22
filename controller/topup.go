@@ -494,6 +494,8 @@ func EpayNotify(c *gin.Context) {
 		if alreadyDone {
 			logger.LogInfo(c.Request.Context(), common.LogText("Epay duplicate callback ignored trade_no=%s callback_type=%s client_ip=%s", verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP()))
 		} else {
+			// R3：记录通道侧流水号（易支付订单号），供与通道后台逐笔对号
+			model.SetTopUpProviderTradeNo(verifyInfo.ServiceTradeNo, verifyInfo.TradeNo)
 			logger.LogInfo(c.Request.Context(), common.LogText("Epay top-up succeeded trade_no=%s callback_type=%s client_ip=%s", verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP()))
 		}
 	} else {

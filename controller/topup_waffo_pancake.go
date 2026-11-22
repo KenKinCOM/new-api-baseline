@@ -529,6 +529,8 @@ func WaffoPancakeWebhook(c *gin.Context) {
 		return
 	}
 
+	// R3：记录通道侧订单号 ORD_*
+	model.SetTopUpProviderTradeNo(tradeNo, event.Data.OrderID)
 	logger.LogInfo(c.Request.Context(), common.LogText("Waffo Pancake top-up succeeded trade_no=%s event_id=%s order_id=%s client_ip=%s", tradeNo, event.ID, event.Data.OrderID, c.ClientIP()))
 	c.String(http.StatusOK, "OK")
 }
