@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -609,6 +610,23 @@ func GetAllTopUps(c *gin.Context) {
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(topups)
 	common.ApiSuccess(c, pageInfo)
+}
+
+// ListTopUpWebhookEvents 按订单号列出全部回调事件（C3：重复入账举证）。
+// 争议时可直接看到同一单号被回调了几次、每次的原始 body、验签结果、来源 IP 与处理结果。
+func ListTopUpWebhookEvents(c *gin.Context) {
+	tradeNo := strings.TrimSpace(c.Query("trade_no"))
+	if tradeNo == "" {
+		common.ApiErrorT(c, "Invalid parameters")
+		return
+	}
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	events, err := model.GetWebhookEventsByTradeNo(tradeNo, limit)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, events)
 }
 
 type AdminCompleteTopupRequest struct {

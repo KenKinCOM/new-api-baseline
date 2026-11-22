@@ -58,6 +58,17 @@ func RecordWebhookEvent(event *WebhookEvent) *WebhookEvent {
 	return event
 }
 
+// GetWebhookEventsByTradeNo 按本地订单号查回调事件（C3：重复入账举证）。
+// limit<=0 时默认最多返回 100 条，按时间倒序。
+func GetWebhookEventsByTradeNo(tradeNo string, limit int) ([]*WebhookEvent, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	var events []*WebhookEvent
+	err := DB.Where("trade_no = ?", tradeNo).Order("id desc").Limit(limit).Find(&events).Error
+	return events, err
+}
+
 // FinishWebhookEvent 回填处理结果。event 为 nil（落库失败）时安全跳过。
 func FinishWebhookEvent(event *WebhookEvent, verified bool, outcome string, tradeNo string, message string) {
 	if event == nil {
