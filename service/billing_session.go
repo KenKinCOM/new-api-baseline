@@ -71,9 +71,15 @@ func (s *BillingSession) Settle(actualQuota int) error {
 			tokenErr = model.IncreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, -delta)
 		}
 		if tokenErr != nil {
-			// 资金来源已提交，令牌调整失败只能记录日志；标记 settled 防止 Refund 误退资金
+			// 资金来源已提交，令牌调整失败只能记录日志；标记 settled 防止 Refund 误退资金。
+			// G-10：同时落一条计费异常，使「余额账与令牌账不一致」有据可查并可通过
+			// RetryPendingBillingAnomalies 重试收敛，而不是只留一行日志后永久失衡。
 			common.SysLog(common.LogText("error adjusting token quota after funding settled (userId=%d, tokenId=%d, delta=%d): %s",
 				s.relayInfo.UserId, s.relayInfo.TokenId, delta, tokenErr.Error()))
+			if anomalyErr := model.RecordTokenQuotaAdjustFailure(s.relayInfo.UserId, s.relayInfo.TokenId, s.relayInfo.RequestId, delta, tokenErr); anomalyErr != nil {
+				common.SysLog(common.LogText("failed to record token quota adjust anomaly (userId=%d, tokenId=%d, delta=%d): %s",
+					s.relayInfo.UserId, s.relayInfo.TokenId, delta, anomalyErr.Error()))
+			}
 		}
 	}
 	// 3) 更新 relayInfo 上的订阅 PostDelta（用于日志）
