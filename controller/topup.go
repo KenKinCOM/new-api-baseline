@@ -593,6 +593,9 @@ func GetAllTopUps(c *gin.Context) {
 
 type AdminCompleteTopupRequest struct {
 	TradeNo string `json:"trade_no"`
+	// ProviderTradeNo 通道侧流水号（L3）。订单上已记录过则可省略，
+	// 都没有的补单会被拒绝，避免补出无法与通道对号的账。
+	ProviderTradeNo string `json:"provider_trade_no"`
 }
 
 // AdminCompleteTopUp 管理员补单接口
@@ -603,13 +606,34 @@ func AdminCompleteTopUp(c *gin.Context) {
 		return
 	}
 
+	// L3：每次补单写一条操作审计，谁在什么时候补了哪一单
+	params := map[string]any{
+		"trade_no":          req.TradeNo,
+		"provider_trade_no": req.ProviderTradeNo,
+		"method":            c.Request.Method,
+		"route":             c.FullPath(),
+	}
+	success := false
+	defer func() {
+		content := "Manually completed top-up order"
+		if !success {
+			content = "Failed to manually complete top-up order"
+		}
+		model.RecordOperationAuditLog(c.GetInt("id"), c.GetInt("role"), content, c.ClientIP(), "topup.manual_complete", params,
+			auditOperatorInfo(c), &model.AuditRequestInfo{
+				Method: c.Request.Method, Route: c.FullPath(), Status: c.Writer.Status(), Success: success,
+			}, c)
+		markAuditLogged(c)
+	}()
+
 	// 订单级互斥，防止并发补单
 	LockOrder(req.TradeNo)
 	defer UnlockOrder(req.TradeNo)
 
-	if err := model.ManualCompleteTopUp(req.TradeNo, c.ClientIP()); err != nil {
+	if err := model.ManualCompleteTopUp(req.TradeNo, req.ProviderTradeNo, c.ClientIP()); err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	success = true
 	common.ApiSuccess(c, nil)
 }

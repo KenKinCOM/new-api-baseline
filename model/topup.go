@@ -522,8 +522,11 @@ func SearchAllTopUps(keyword string, pageInfo *common.PageInfo) (topups []*TopUp
 	return topups, total, nil
 }
 
-// ManualCompleteTopUp 管理员手动完成订单并给用户充值
-func ManualCompleteTopUp(tradeNo string, callerIp string) error {
+// ManualCompleteTopUp 管理员手动完成订单并给用户充值。
+//
+// L3：补单前置校验——必须能给出通道侧流水号（订单上已有，或本次由操作者提供），
+// 否则补出来的单无法与通道后台对号，等于凭空造账。留痕由接口层写操作审计。
+func ManualCompleteTopUp(tradeNo string, providerTradeNo string, callerIp string) error {
 	if tradeNo == "" {
 		return common.NewMessage("Order number not provided")
 	}
@@ -553,6 +556,16 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 		if !topUpStatusAllowsCredit(topUp.Status) {
 			return common.NewMessage("Order is not pending payment and cannot be completed")
 		}
+
+		// L3：通道侧流水号必填（订单上已有或本次提供）
+		effectiveProviderTradeNo := topUp.ProviderTradeNo
+		if effectiveProviderTradeNo == "" {
+			effectiveProviderTradeNo = providerTradeNo
+		}
+		if effectiveProviderTradeNo == "" {
+			return common.NewMessage("Provider trade number is required for manual completion")
+		}
+		topUp.ProviderTradeNo = effectiveProviderTradeNo
 
 		// 计算应充值额度：
 		// - Stripe 订单：Money 代表经分组倍率换算后的美元数量，直接 * QuotaPerUnit
