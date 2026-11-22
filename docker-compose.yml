@@ -2,10 +2,10 @@
 #
 # 本地开发请用 docker-compose.dev.yml（带前端热更新，允许宿主直映射与默认口令）。
 # 本文件按 T4 事实表 §4.3「上云前必须改」加固，用于 ECS/ALB 生产形态：
-#   * 镜像来自本仓构建并固定 tag/digest，不再使用 calciumion/new-api:latest
-#   * 不再映射 3000:3000 到宿主机，只允许 ALB/安全组入站
+#   * 镜像来自本仓构建并固定 tag/digest，不再使用上游 latest 镜像
+#   * 不再把服务端口直映射到宿主机，只允许 ALB/安全组入站
 #   * 无 container_name（可横向扩容到 ≥2 副本）
-#   * 无 123456 弱口令；所有口令必须由 .env 显式提供，缺失即启动失败
+#   * 无任何默认弱口令；所有口令必须由 .env 显式提供，缺失即启动失败
 #   * 密钥走 *_FILE（SESSION_SECRET_FILE / CRYPTO_SECRET_FILE），不落进 inspect 输出
 #   * 有 CPU/内存上限与容器日志轮转
 #
@@ -17,7 +17,7 @@
 
 services:
   new-api:
-    image: ${NEW_API_IMAGE:?NEW_API_IMAGE must be a locally built tag or digest, not calciumion/new-api:latest}
+    image: ${NEW_API_IMAGE:?NEW_API_IMAGE must be a locally built tag or digest, not an upstream floating tag}
     restart: always
     command: --log-dir /data/logs
     env_file:
@@ -48,7 +48,7 @@ services:
     networks:
       - new-api-network
     # 不映射宿主端口：只经 ALB / 安全组入站。
-    # 单机调试确需直连时，只绑回环：ports: ["127.0.0.1:3000:3000"]
+    # 单机调试确需直连时，ports 只绑回环地址（127.0.0.1）上的同一端口
     healthcheck:
       # 校验 DB 的 readiness；/api/status 在 DB 挂掉时仍返回 success（T4 §3.3）
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/api/readyz | grep -q '\"status\":\"ready\"' || exit 1"]
