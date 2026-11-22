@@ -119,11 +119,30 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		other.SetPublic("is_model_mapped", true)
 		other.SetPublic("upstream_model_name", relayInfo.UpstreamModelName)
 	}
+	// G-01: PriceData's extra ratios (per-call duration, resolution, image
+	// count "n", ...) are multiplied into the charge, but only ever existed in
+	// memory. Record the individual factors so a fixed-price or multi-image
+	// charge can be recomputed from the log alone.
+	if ratios := relayInfo.PriceData.OtherRatios(); len(ratios) > 0 {
+		other.SetPublic("other_ratios", ratios)
+	}
 
 	isSystemPromptOverwritten := common.GetContextKeyBool(ctx, constant.ContextKeySystemPromptOverride)
 	if isSystemPromptOverwritten {
 		other.SetPublic("is_system_prompt_overwritten", true)
 	}
+
+	// G-02: record which pricing table generation priced this request. Without
+	// it a historical charge cannot be attributed to the pricing scheme that
+	// produced it once prices are edited. The value is the same digest that
+	// /api/pricing returns, so a log line can be traced back to a published
+	// pricing snapshot.
+	other.SetPublic("pricing_version", model.CurrentPricingVersion())
+	// G-15: QuotaPerUnit is a runtime-mutable global. The logged quota is an
+	// integer in "quota" units, so without the coefficient in force at charge
+	// time the amount cannot be converted back to money after the coefficient
+	// is changed.
+	other.SetPublic("quota_per_unit", common.QuotaPerUnit)
 
 	AppendRelayLogAdminInfo(ctx, relayInfo, other)
 	AppendResponseModelLogInfo(relayInfo, other)
@@ -204,6 +223,13 @@ func appendBillingInfo(relayInfo *relaycommon.RelayInfo, other *model.LogOther) 
 	// billing_source: "wallet" or "subscription"
 	if relayInfo.BillingSource != "" {
 		other.SetPublic("billing_source", relayInfo.BillingSource)
+	}
+	// G-16: the trust bypass admits a request with preConsumedQuota=0. Record
+	// the decision and the threshold that allowed it, so "why was this request
+	// not pre-consumed" is answerable from the log after the fact.
+	if relayInfo.BillingTrusted {
+		other.SetPublic("trusted", true)
+		other.SetPublic("trust_quota_usd", relayInfo.BillingTrustQuotaUSD)
 	}
 	if relayInfo.UserSetting.BillingPreference != "" {
 		other.SetPublic("billing_preference", relayInfo.UserSetting.BillingPreference)
@@ -339,6 +365,11 @@ func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData hosttypes.P
 	if priceData.GroupRatioInfo.HasSpecialRatio {
 		other.SetPublic("user_group_ratio", priceData.GroupRatioInfo.GroupSpecialRatio)
 	}
+	if ratios := priceData.OtherRatios(); len(ratios) > 0 {
+		other.SetPublic("other_ratios", ratios)
+	}
+	other.SetPublic("pricing_version", model.CurrentPricingVersion())
+	other.SetPublic("quota_per_unit", common.QuotaPerUnit)
 	appendRequestPath(nil, relayInfo, other)
 	appendRequestPluginRecord(relayInfo, other)
 	return other
@@ -357,7 +388,26 @@ func InjectTieredBillingInfo(other *model.LogOther, relayInfo *relaycommon.Relay
 	}
 	other.SetPublic("billing_mode", "tiered_expr")
 	other.SetPublic("expr_b64", base64.StdEncoding.EncodeToString([]byte(snap.ExprString)))
+	// G-03: expr_b64 alone forces a reader to decode and re-hash the expression
+	// to find out which expression version priced the request. Record the hash
+	// and the version next to it so a recompute can verify it used the same
+	// expression.
+	other.SetPublic("expr_hash", snap.ExprHash)
+	other.SetPublic("expr_version", snap.ExprVersion)
 	if result != nil {
+		if result.CrossedTier {
+			// G-05: the settlement tier is higher than the tier the reservation
+			// was based on, so the pre-consumed amount and the final charge
+			// disagree. Record it on the log and raise an alert line; the
+			// top-up (追补) policy itself is out of scope for this item.
+			other.SetPublic("crossed_tier", true)
+			other.SetPublic("estimated_tier", snap.EstimatedTier)
+			common.SysLog(common.LogText(
+				"ALERT tiered billing crossed tier: request=%s user=%d model=%s estimated_tier=%q actual_tier=%q estimated_quota=%d actual_quota=%d",
+				relayInfo.RequestId, relayInfo.UserId, snap.ModelName,
+				snap.EstimatedTier, result.MatchedTier,
+				snap.EstimatedQuotaAfterGroup, result.ActualQuotaAfterGroup))
+		}
 		if tokens := result.BillingTokens; tokens != nil && result.BillingUnit == billingexpr.BillingUnitToken {
 			other.SetPublic("image_cache_tokens", tokens.ImgCR)
 			other.SetPublic("billing_tokens", map[string]float64{

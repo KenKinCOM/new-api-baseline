@@ -180,6 +180,15 @@ func SetApiRouter(router *gin.Engine) {
 			}
 		}
 
+		// Billing ledger anomalies (G-10): visibility and manual retry for
+		// charges whose funding side committed but token side failed.
+		billingAdminRoute := apiRouter.Group("/billing/admin")
+		billingAdminRoute.Use(middleware.AdminAuth())
+		{
+			billingAdminRoute.GET("/anomalies", controller.AdminListBillingAnomalies)
+			billingAdminRoute.POST("/anomalies/retry", controller.AdminRetryBillingAnomalies)
+		}
+
 		// Subscription billing (plans, purchase, admin management)
 		subscriptionRoute := apiRouter.Group("/subscription")
 		subscriptionRoute.Use(middleware.UserAuth())

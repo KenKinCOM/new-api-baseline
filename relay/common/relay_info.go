@@ -143,6 +143,11 @@ type RelayInfo struct {
 	// BillingSource indicates whether this request is billed from wallet quota or subscription.
 	// "" or "wallet" => wallet; "subscription" => subscription
 	BillingSource string
+	// BillingTrusted 记录本次请求命中了信任额度旁路（预扣为 0）。
+	// BillingTrustQuotaUSD 是命中时生效的信任阈值（USD），用于在消费日志里回答
+	// 「这一单为什么没有预扣」。
+	BillingTrusted       bool
+	BillingTrustQuotaUSD float64
 	// SubscriptionId is the user_subscriptions.id used when BillingSource == "subscription"
 	SubscriptionId int
 	// SubscriptionPreConsumed is the amount pre-consumed on subscription item (quota units or 1)

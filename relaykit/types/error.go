@@ -207,6 +207,11 @@ func (e *NewAPIError) ToOpenAIError(upstreamURLs ...string) OpenAIError {
 			Param:   "",
 			Code:    e.errorCode,
 		}
+		// Machine-readable facts attached by the caller (e.g. quota shortfall
+		// remaining/required/reset_at) must survive into the client envelope.
+		if len(e.Metadata) > 0 {
+			result.Metadata = e.Metadata
+		}
 	}
 	if e.errorCode != ErrorCodeCountTokenFailed {
 		result.Message = kitutil.MaskSensitiveInfo(result.Message, upstreamURLs...)
@@ -395,6 +400,35 @@ func ErrOptionWithSkipRetry() NewAPIErrorOptions {
 func ErrOptionWithNoRecordErrorLog() NewAPIErrorOptions {
 	return func(e *NewAPIError) {
 		e.recordErrorLog = kitutil.GetPointer(false)
+	}
+}
+
+// ErrOptionWithQuotaInfo attaches machine-readable quota facts to the error
+// envelope (error.metadata.remaining / required / reset_at) so a client can
+// react to a shortfall without parsing localized message text. resetAt is a
+// unix timestamp and is omitted when the limit has no reset point (e.g. a
+// one-shot token quota rather than a periodic budget).
+func ErrOptionWithQuotaInfo(remaining, required int, resetAt int64) NewAPIErrorOptions {
+	return func(e *NewAPIError) {
+		if e == nil {
+			return
+		}
+		fields := map[string]any{"remaining": remaining}
+		if required > 0 {
+			fields["required"] = required
+		}
+		if resetAt > 0 {
+			fields["reset_at"] = resetAt
+		}
+		payload, err := json.Marshal(fields)
+		if err != nil {
+			return
+		}
+		e.Metadata = payload
+		if openAIError, ok := e.RelayError.(OpenAIError); ok {
+			openAIError.Metadata = payload
+			e.RelayError = openAIError
+		}
 	}
 }
 

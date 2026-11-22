@@ -337,11 +337,49 @@ type RecordConsumeLogParams struct {
 	Other            *LogOther         `json:"other"`
 }
 
+// recordConsumeAuditLine is the fallback record used when the consume log is
+// disabled. It carries every field needed to recompute the charge and to match
+// it against wallet/token balances, so an operator can still rebuild the ledger
+// from the backend log.
+func recordConsumeAuditLine(c *gin.Context, userId int, params RecordConsumeLogParams) {
+	content := make([]string, 0, len(params.Content))
+	for _, part := range params.Content {
+		if part != nil {
+			content = append(content, part.Error())
+		}
+	}
+	payload := map[string]any{
+		"log_consume_enabled": false,
+		"user_id":             userId,
+		"channel_id":          params.ChannelId,
+		"model_name":          params.ModelName,
+		"token_id":            params.TokenId,
+		"token_name":          params.TokenName,
+		"group":               params.Group,
+		"quota":               params.Quota,
+		"prompt_tokens":       params.PromptTokens,
+		"completion_tokens":   params.CompletionTokens,
+		"use_time_seconds":    params.UseTimeSeconds,
+		"is_stream":           params.IsStream,
+		"request_id":          c.GetString(common.RequestIdKey),
+		"upstream_request_id": c.GetString(common.UpstreamRequestIdKey),
+		"created_at":          common.GetTimestamp(),
+		"other":               params.Other.JSONString(),
+		"content":             content,
+	}
+	logger.LogWarn(c, common.LogText("consume log disabled (LogConsumeEnabled=false), consume record kept in backend log only: %s", common.GetJsonString(payload)))
+}
+
 func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
 	// Request plugin report hooks read what the request settled, whether or
 	// not consume logs are kept.
 	common.SetContextKey(c, constant.ContextKeyConsumeLog, &params)
 	if !common.LogConsumeEnabled {
+		// G-11: by the time we get here the quota has already moved. Disabling
+		// the consume log must not make that charge unrecoverable, so write a
+		// complete, replayable record to the backend log instead of returning
+		// silently.
+		recordConsumeAuditLine(c, userId, params)
 		return
 	}
 	logger.LogInfo(c, common.LogText("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
