@@ -1,18 +1,63 @@
 # File path: /etc/systemd/system/new-api.service
-# sudo systemctl daemon-reload
-# sudo systemctl start new-api
-# sudo systemctl enable new-api
-# sudo systemctl status new-api
+#
+# 安装步骤：
+#   1. sudo install -m 0755 new-api /usr/local/bin/new-api
+#   2. sudo useradd --system --home-dir /var/lib/new-api --shell /usr/sbin/nologin newapi
+#   3. sudo install -d -o newapi -g newapi -m 0750 /var/lib/new-api /var/lib/new-api/logs
+#   4. sudo install -d -o root -g newapi -m 0750 /etc/new-api
+#      sudo install -m 0440 -o root -g newapi /dev/null /etc/new-api/new-api.env   # 见下方 EnvironmentFile
+#      sudo install -m 0400 -o root -g newapi /dev/null /etc/new-api/session_secret
+#      sudo install -m 0400 -o root -g newapi /dev/null /etc/new-api/crypto_secret
+#   5. sudo systemctl daemon-reload && sudo systemctl enable --now new-api
+#
+# 与旧版的差异（T4 §4.4 / §4.5 #6）：
+#   * 路径不再是 /path/to/new-api 占位符
+#   * User/Group 显式且与数据目录属主一致
+#   * 环境变量来自 EnvironmentFile，密钥来自 *_FILE（不写进 unit、不进 `ps e`）
+#   * TimeoutStopSec 提到 130s：代码默认优雅退出等 120s（main.go:261），
+#     systemd 默认 90s 会在 SSE 长连接未断时直接 SIGKILL
 [Unit]
-Description=One API Service
-After=network.target
+Description=New API Service
+Documentation=https://github.com/QuantumNous/new-api
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-User=ubuntu  # 注意修改用户名
-WorkingDirectory=/path/to/new-api  # 注意修改路径
-ExecStart=/path/to/new-api/new-api --port 3000 --log-dir /path/to/new-api/logs  # 注意修改路径和端口号
+Type=simple
+User=newapi
+Group=newapi
+WorkingDirectory=/var/lib/new-api
+
+# 非敏感配置（SQL_DSN / REDIS_CONN_STRING / TRUSTED_PROXIES / NODE_NAME ...）放这里，权限 0440 root:newapi
+EnvironmentFile=/etc/new-api/new-api.env
+# 高价值密钥走文件，配合代码侧 *_FILE 读取约定（C-01）
+Environment=SESSION_SECRET_FILE=/etc/new-api/session_secret
+Environment=CRYPTO_SECRET_FILE=/etc/new-api/crypto_secret
+
+ExecStart=/usr/local/bin/new-api --port 3000 --log-dir /var/lib/new-api/logs
 Restart=always
 RestartSec=5
+
+# 优雅退出：代码默认等 120s（main.go:261），必须大于该值
+TimeoutStopSec=130
+KillSignal=SIGTERM
+
+# 日志轮转（C-06）由程序自身按 LOG_MAX_SIZE_MB / LOG_RETENTION_DAYS 执行；
+# 若同时用 distro logrotate，请只保留一种，避免双重切割。
+Environment=LOG_MAX_SIZE_MB=200
+Environment=LOG_RETENTION_DAYS=14
+
+# 最小权限（C-04 的单机等价物）
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/new-api
+RestrictSUIDSGID=true
+LockPersonality=true
+
+# 打开的文件描述符上限：SSE / 长连接场景必须显式抬高
+LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
