@@ -138,6 +138,11 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	// /api/pricing returns, so a log line can be traced back to a published
 	// pricing snapshot.
 	other.SetPublic("pricing_version", model.CurrentPricingVersion())
+	// G-15: QuotaPerUnit is a runtime-mutable global. The logged quota is an
+	// integer in "quota" units, so without the coefficient in force at charge
+	// time the amount cannot be converted back to money after the coefficient
+	// is changed.
+	other.SetPublic("quota_per_unit", common.QuotaPerUnit)
 
 	AppendRelayLogAdminInfo(ctx, relayInfo, other)
 	AppendResponseModelLogInfo(relayInfo, other)
@@ -357,6 +362,7 @@ func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData hosttypes.P
 		other.SetPublic("other_ratios", ratios)
 	}
 	other.SetPublic("pricing_version", model.CurrentPricingVersion())
+	other.SetPublic("quota_per_unit", common.QuotaPerUnit)
 	appendRequestPath(nil, relayInfo, other)
 	appendRequestPluginRecord(relayInfo, other)
 	return other
