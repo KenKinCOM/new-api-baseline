@@ -380,6 +380,7 @@ func migrateDB() error {
 		&SystemTask{},
 		&SystemTaskLock{},
 		&BillingAnomaly{},
+		&BillingRecalcDiff{},
 		&QuotaLedger{},
 		&PaymentTradeNoClaim{},
 		&WebhookEvent{},

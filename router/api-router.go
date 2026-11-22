@@ -188,6 +188,10 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			billingAdminRoute.GET("/anomalies", controller.AdminListBillingAnomalies)
 			billingAdminRoute.POST("/anomalies/retry", controller.AdminRetryBillingAnomalies)
+			// Historical ledger recalculation (G-04): replay one consume log
+			// against the pricing frozen on it and list the differences found.
+			billingAdminRoute.POST("/recalc", controller.AdminRecalculateConsumeLog)
+			billingAdminRoute.GET("/recalc/diffs", controller.AdminListBillingRecalcDiffs)
 		}
 
 		// Subscription billing (plans, purchase, admin management)
