@@ -34,6 +34,53 @@ func CreateLogCleanupSystemTask(c *gin.Context) {
 	})
 }
 
+// CreateBillingReconcileSystemTask queues one consume-side three-way
+// reconciliation run (G-12). The scheduler already runs it once a day; this
+// root-only entry lets ops verify a known difference without waiting for the
+// next tick. An active row is returned instead of creating a second one, so the
+// per-type lease stays the single source of truth.
+func CreateBillingReconcileSystemTask(c *gin.Context) {
+	active, err := model.GetActiveSystemTask(model.SystemTaskTypeBillingReconcile)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if active != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "billing reconcile task is already running",
+			"data":    active.ToResponse(),
+		})
+		return
+	}
+	task, err := model.CreateSystemTask(model.SystemTaskTypeBillingReconcile, nil, nil)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    task.ToResponse(),
+	})
+}
+
+// ListBillingReconcileDiffs returns the difference rows written by the billing
+// reconcile task (G-12). run_date is optional; without it the newest rows win.
+func ListBillingReconcileDiffs(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
+	rows, err := model.ListBillingReconcileDiffs(c.Query("run_date"), limit)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    rows,
+	})
+}
+
 func GetCurrentSystemTask(c *gin.Context) {
 	taskType := c.Query("type")
 	if taskType == "" {
