@@ -211,3 +211,80 @@ func TestNormalizeTokenBudgetPeriod(t *testing.T) {
 		assert.False(t, ok, period)
 	}
 }
+
+func intPtr(v int) *int { return &v }
+
+func strPtr(v string) *string { return &v }
+
+func TestApplyTokenBudgetChangeValidation(t *testing.T) {
+	now := common.GetTimestamp()
+	dailyStart, _, ok := TokenBudgetWindow(TokenBudgetPeriodDaily, now)
+	require.True(t, ok)
+
+	t.Run("negative quota rejected", func(t *testing.T) {
+		token := Token{}
+		err := ApplyTokenBudgetChange(&token, intPtr(-1), strPtr("daily"), nil, 0, now)
+		assert.ErrorIs(t, err, ErrTokenBudgetQuotaNegative)
+	})
+
+	t.Run("missing period rejected", func(t *testing.T) {
+		token := Token{}
+		err := ApplyTokenBudgetChange(&token, intPtr(100), nil, nil, 0, now)
+		assert.ErrorIs(t, err, ErrTokenBudgetPeriodInvalid)
+	})
+
+	t.Run("unknown period rejected", func(t *testing.T) {
+		token := Token{}
+		err := ApplyTokenBudgetChange(&token, intPtr(100), strPtr("weekly"), nil, 0, now)
+		assert.ErrorIs(t, err, ErrTokenBudgetPeriodInvalid)
+	})
+
+	t.Run("quota over maximum rejected", func(t *testing.T) {
+		token := Token{}
+		err := ApplyTokenBudgetChange(&token, intPtr(1000), strPtr("daily"), nil, 500, now)
+		assert.ErrorIs(t, err, ErrTokenBudgetQuotaTooLarge)
+	})
+
+	t.Run("new budget starts a fresh window", func(t *testing.T) {
+		token := Token{BudgetUsed: 42}
+		require.NoError(t, ApplyTokenBudgetChange(&token, intPtr(100), strPtr("daily"), nil, 0, now))
+		assert.Equal(t, 100, token.BudgetQuota)
+		assert.Equal(t, TokenBudgetPeriodDaily, token.BudgetPeriod)
+		assert.Equal(t, dailyStart, token.BudgetWindowStart)
+		assert.Equal(t, 0, token.BudgetUsed)
+	})
+
+	t.Run("unchanged budget keeps usage", func(t *testing.T) {
+		previous := Token{BudgetQuota: 100, BudgetPeriod: TokenBudgetPeriodDaily, BudgetWindowStart: dailyStart, BudgetUsed: 66}
+		token := Token{}
+		require.NoError(t, ApplyTokenBudgetChange(&token, intPtr(100), strPtr("daily"), &previous, 0, now))
+		assert.Equal(t, 66, token.BudgetUsed, "只改名字不应清零预算账")
+		assert.Equal(t, dailyStart, token.BudgetWindowStart)
+	})
+
+	t.Run("changing quota resets usage", func(t *testing.T) {
+		previous := Token{BudgetQuota: 100, BudgetPeriod: TokenBudgetPeriodDaily, BudgetWindowStart: dailyStart, BudgetUsed: 66}
+		token := Token{}
+		require.NoError(t, ApplyTokenBudgetChange(&token, intPtr(200), nil, &previous, 0, now))
+		assert.Equal(t, 200, token.BudgetQuota)
+		assert.Equal(t, 0, token.BudgetUsed)
+	})
+
+	t.Run("omitting budget fields preserves previous", func(t *testing.T) {
+		previous := Token{BudgetQuota: 100, BudgetPeriod: TokenBudgetPeriodDaily, BudgetWindowStart: dailyStart, BudgetUsed: 66}
+		token := Token{}
+		require.NoError(t, ApplyTokenBudgetChange(&token, nil, nil, &previous, 0, now))
+		assert.Equal(t, 100, token.BudgetQuota)
+		assert.Equal(t, 66, token.BudgetUsed)
+	})
+
+	t.Run("zero quota disables and clears", func(t *testing.T) {
+		previous := Token{BudgetQuota: 100, BudgetPeriod: TokenBudgetPeriodDaily, BudgetWindowStart: dailyStart, BudgetUsed: 66}
+		token := Token{}
+		require.NoError(t, ApplyTokenBudgetChange(&token, intPtr(0), nil, &previous, 0, now))
+		assert.Equal(t, 0, token.BudgetQuota)
+		assert.Equal(t, "", token.BudgetPeriod)
+		assert.Equal(t, 0, token.BudgetUsed)
+		assert.Equal(t, int64(0), token.BudgetWindowStart)
+	})
+}

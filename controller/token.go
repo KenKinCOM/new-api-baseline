@@ -37,6 +37,10 @@ type tokenRequest struct {
 	AutoGroups tokenAutoGroupsInput `json:"auto_groups"`
 	// 指针区分“未传”和显式 false：新建时未传即开启，更新时未传则保留原值。
 	AllowUserQuotaQuery *bool `json:"allow_user_quota_query"`
+	// G-06 预算字段同样用指针区分「未传」与「显式置 0」：老客户端不传
+	// budget_* 时必须保留既有预算，不能被当成「关闭预算」。
+	BudgetQuota  *int    `json:"budget_quota"`
+	BudgetPeriod *string `json:"budget_period"`
 }
 
 type tokenResponse struct {
@@ -60,6 +64,15 @@ func buildMaskedTokenResponse(token *model.Token) *tokenResponse {
 	}
 	maskedToken := *token
 	maskedToken.Key = token.GetMaskedKey()
+	// G-06：周期已切换但还没产生新请求时，库里残留的是上一周期的已用量，
+	// 读接口按当前周期口径返回（0），避免管理端看到「昨天用满」的假象。
+	if maskedToken.BudgetQuota > 0 {
+		if start, _, ok := model.TokenBudgetWindow(maskedToken.BudgetPeriod, common.GetTimestamp()); ok &&
+			maskedToken.BudgetWindowStart != start {
+			maskedToken.BudgetWindowStart = start
+			maskedToken.BudgetUsed = 0
+		}
+	}
 	autoGroups, err := token.GetAutoGroups()
 	if err != nil {
 		common.SysError(common.LogText("failed to parse auto groups for token %d: %v", token.Id, err))
@@ -77,6 +90,15 @@ func buildMaskedTokenResponses(tokens []*model.Token) []*tokenResponse {
 		maskedTokens = append(maskedTokens, buildMaskedTokenResponse(token))
 	}
 	return maskedTokens
+}
+
+// applyTokenBudgetInput 校验并落定 G-06 的周期预算配置（规则见 model.ApplyTokenBudgetChange）。
+func applyTokenBudgetInput(c *gin.Context, token *model.Token, quota *int, period *string, previous *model.Token) bool {
+	if err := model.ApplyTokenBudgetChange(token, quota, period, previous, maxTokenQuota(), common.GetTimestamp()); err != nil {
+		common.ApiError(c, err)
+		return false
+	}
+	return true
 }
 
 func getTokenRequestUserGroup(c *gin.Context) (string, error) {
@@ -363,6 +385,9 @@ func AddToken(c *gin.Context) {
 		CrossGroupRetry:    token.CrossGroupRetry,
 		AutoGroups:         token.AutoGroups,
 	}
+	if !applyTokenBudgetInput(c, &cleanToken, request.BudgetQuota, request.BudgetPeriod, nil) {
+		return
+	}
 	cleanToken.AllowUserQuotaQuery = request.AllowUserQuotaQuery == nil || *request.AllowUserQuotaQuery
 	err = cleanToken.Insert()
 	if err != nil {
@@ -461,6 +486,9 @@ func UpdateToken(c *gin.Context) {
 		}
 		cleanToken.Group = token.Group
 		cleanToken.CrossGroupRetry = token.CrossGroupRetry
+		if !applyTokenBudgetInput(c, cleanToken, request.BudgetQuota, request.BudgetPeriod, &previous) {
+			return
+		}
 		if token.Group != "auto" {
 			cleanToken.CrossGroupRetry = false
 			_ = cleanToken.SetAutoGroups(nil)
@@ -496,6 +524,8 @@ func UpdateToken(c *gin.Context) {
 			{"group", previous.Group != cleanToken.Group},
 			{"cross_group_retry", previous.CrossGroupRetry != cleanToken.CrossGroupRetry},
 			{"auto_groups", previous.AutoGroups != cleanToken.AutoGroups},
+			{"budget_quota", previous.BudgetQuota != cleanToken.BudgetQuota},
+			{"budget_period", previous.BudgetPeriod != cleanToken.BudgetPeriod},
 		} {
 			if field.changed {
 				changedFields = append(changedFields, field.name)

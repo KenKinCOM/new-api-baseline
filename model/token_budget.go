@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -236,4 +237,73 @@ func ResetTokenBudgetWindow(token *Token, now int64) {
 	}
 	token.BudgetWindowStart = start
 	token.BudgetUsed = 0
+}
+
+// 配置入口的校验错误（controller 转成面向用户的提示）。
+var (
+	ErrTokenBudgetQuotaNegative = errors.New("budget quota cannot be negative")
+	ErrTokenBudgetQuotaTooLarge = errors.New("budget quota exceeds valid range")
+	ErrTokenBudgetPeriodInvalid = errors.New("budget period must be daily or monthly")
+)
+
+// ApplyTokenBudgetChange 按管理端入参落定令牌预算字段，并处理三种语义：
+//   - quota/period 均为 nil：请求没带预算字段，新建视为未启用、更新保留原值；
+//   - quota<=0：关闭预算，周期与已用量一起清空；
+//   - 预算额度或周期变化：本周期已用量从 0 重新计算（改配置即开启新周期）。
+//
+// budget_used / budget_window_start 始终由服务端权威维护，忽略客户端传值。
+func ApplyTokenBudgetChange(token *Token, quota *int, period *string, previous *Token, maxQuota int, now int64) error {
+	if quota == nil && period == nil {
+		if previous == nil {
+			token.BudgetQuota, token.BudgetPeriod = 0, ""
+			token.BudgetWindowStart, token.BudgetUsed = 0, 0
+			return nil
+		}
+		token.BudgetQuota = previous.BudgetQuota
+		token.BudgetPeriod = previous.BudgetPeriod
+		token.BudgetWindowStart = previous.BudgetWindowStart
+		token.BudgetUsed = previous.BudgetUsed
+		return nil
+	}
+	if quota != nil {
+		token.BudgetQuota = *quota
+	} else if previous != nil {
+		token.BudgetQuota = previous.BudgetQuota
+	}
+	if period != nil {
+		token.BudgetPeriod = *period
+	} else if previous != nil {
+		token.BudgetPeriod = previous.BudgetPeriod
+	} else {
+		token.BudgetPeriod = ""
+	}
+
+	if token.BudgetQuota < 0 {
+		return ErrTokenBudgetQuotaNegative
+	}
+	if token.BudgetQuota == 0 {
+		token.BudgetPeriod = ""
+		token.BudgetWindowStart = 0
+		token.BudgetUsed = 0
+		return nil
+	}
+	normalized, ok := NormalizeTokenBudgetPeriod(token.BudgetPeriod)
+	if !ok || normalized == "" {
+		return ErrTokenBudgetPeriodInvalid
+	}
+	if maxQuota > 0 && token.BudgetQuota > maxQuota {
+		return ErrTokenBudgetQuotaTooLarge
+	}
+	token.BudgetPeriod = normalized
+	unchanged := previous != nil &&
+		previous.BudgetQuota == token.BudgetQuota &&
+		previous.BudgetPeriod == token.BudgetPeriod
+	if unchanged {
+		// 预算未变：保留本周期已用量，避免「改个名字」把预算账清零。
+		token.BudgetWindowStart = previous.BudgetWindowStart
+		token.BudgetUsed = previous.BudgetUsed
+		return nil
+	}
+	ResetTokenBudgetWindow(token, now)
+	return nil
 }
