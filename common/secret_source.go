@@ -66,10 +66,10 @@ func LoadSecret(name string) (value string, origin SecretOrigin, err error) {
 		return "", SecretOriginFile, fmt.Errorf("%s points at %s which is empty", fileEnv, filePath)
 	}
 	if inline != "" && inline != fileValue {
-		log.Printf(LogText("WARNING: both %s and %s are set and differ; using the file value from %s"), name, fileEnv, filePath)
+		log.Print(LogText("WARNING: both %s and %s are set and differ; using the file value from %s", name, fileEnv, filePath))
 	}
 	if info, statErr := os.Stat(filePath); statErr == nil && info.Mode().Perm()&0o044 != 0 {
-		log.Printf(LogText("WARNING: secret file %s is readable by group/other (mode %s); restrict it to the service user (e.g. 0400)"), filePath, info.Mode().Perm().String())
+		log.Print(LogText("WARNING: secret file %s is readable by group/other (mode %s); restrict it to the service user (e.g. 0400)", filePath, info.Mode().Perm().String()))
 	}
 	return fileValue, SecretOriginFile, nil
 }
