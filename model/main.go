@@ -376,6 +376,7 @@ func migrateDB() error {
 		&QuotaLedger{},
 		&PaymentTradeNoClaim{},
 		&WebhookEvent{},
+		&TopUpReconcileDiff{},
 		&CasbinRule{},
 		&AuthzRole{},
 		&UserAccessToken{},

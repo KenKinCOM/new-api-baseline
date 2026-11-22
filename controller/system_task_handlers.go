@@ -24,6 +24,37 @@ func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
 	service.RegisterSystemTaskHandler(systemTaskCleanupHandler{})
 	service.RegisterSystemTaskHandler(topUpPendingCleanupHandler{})
+	service.RegisterSystemTaskHandler(topUpReconcileHandler{})
+}
+
+// topUpReconcileHandler 每日对「前一个自然日」做充值三方对账（R6）：
+// 成功订单的 credited_quota、额度流水 delta、充值日志 quota 三者比对，
+// 差异写入 topup_reconcile_diffs；无差异时不产任何行。
+type topUpReconcileHandler struct{}
+
+func (topUpReconcileHandler) Type() string { return model.SystemTaskTypeTopUpReconcile }
+
+func (topUpReconcileHandler) Enabled() bool { return true }
+
+func (topUpReconcileHandler) Interval() time.Duration { return 24 * time.Hour }
+
+func (topUpReconcileHandler) NewPayload() any { return nil }
+
+func (topUpReconcileHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	if ctx.Err() != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, ctx.Err())
+		return
+	}
+	now := time.Now()
+	endOfYesterday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
+	startOfYesterday := endOfYesterday - 24*60*60
+	runDate := model.TopUpReconcileRunDate(startOfYesterday)
+	summary, err := model.RunTopUpReconcile(runDate, startOfYesterday, endOfYesterday-1)
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, summary, err)
+		return
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
 }
 
 // topUpPendingCleanupHandler 每小时把超期的 pending 充值单转为 expired（L2）。
