@@ -395,6 +395,19 @@ func InjectTieredBillingInfo(other *model.LogOther, relayInfo *relaycommon.Relay
 	other.SetPublic("expr_hash", snap.ExprHash)
 	other.SetPublic("expr_version", snap.ExprVersion)
 	if result != nil {
+		if result.CrossedTier {
+			// G-05: the settlement tier is higher than the tier the reservation
+			// was based on, so the pre-consumed amount and the final charge
+			// disagree. Record it on the log and raise an alert line; the
+			// top-up (追补) policy itself is out of scope for this item.
+			other.SetPublic("crossed_tier", true)
+			other.SetPublic("estimated_tier", snap.EstimatedTier)
+			common.SysLog(common.LogText(
+				"ALERT tiered billing crossed tier: request=%s user=%d model=%s estimated_tier=%q actual_tier=%q estimated_quota=%d actual_quota=%d",
+				relayInfo.RequestId, relayInfo.UserId, snap.ModelName,
+				snap.EstimatedTier, result.MatchedTier,
+				snap.EstimatedQuotaAfterGroup, result.ActualQuotaAfterGroup))
+		}
 		if tokens := result.BillingTokens; tokens != nil && result.BillingUnit == billingexpr.BillingUnitToken {
 			other.SetPublic("image_cache_tokens", tokens.ImgCR)
 			other.SetPublic("billing_tokens", map[string]float64{
