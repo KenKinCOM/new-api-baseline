@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/shopspring/decimal"
@@ -68,6 +69,22 @@ func AdjustUserQuota(userID, operatorRole int, mode string, value int) (*UserQuo
 			}
 		}
 		adjustment = UserQuotaAdjustment{UserID: user.Id, Username: user.Username, Before: user.Quota, After: after}
+		// R5：人工调额也进额度流水，期初/期末与本次增量同事务落库
+		if delta := int64(after) - int64(user.Quota); delta != 0 {
+			if err := RecordQuotaLedger(tx, &QuotaLedger{
+				UserId:      userID,
+				CreatedAt:   common.GetTimestamp(),
+				ChangeType:  QuotaLedgerTypeAdjust,
+				DeltaQuota:  delta,
+				BeforeQuota: int64(user.Quota),
+				AfterQuota:  int64(after),
+				Source:      "admin",
+				Operator:    fmt.Sprintf("role:%d", operatorRole),
+				Remark:      mode,
+			}); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
