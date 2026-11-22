@@ -30,7 +30,14 @@ type Token struct {
 	CrossGroupRetry    bool           `json:"cross_group_retry"` // 跨分组重试，仅auto分组有效
 	AutoGroups         string         `json:"-" gorm:"type:text"`
 	DeletedAt          gorm.DeletedAt `gorm:"index"`
-	// 允许用此令牌查询所属用户的额度；新建令牌默认开启，已有令牌升级后保持关闭
+	// G-06 周期预算：本周期内的消费上限。budget_quota<=0 表示不启用预算。
+	// budget_period 只接受 daily / monthly；budget_window_start 是当前周期的起点，
+	// 周期切换时已用量归零；budget_used 是本周期已用量（判定与回写均以数据库为准）。
+	BudgetQuota       int    `json:"budget_quota" gorm:"default:0"`
+	BudgetPeriod      string `json:"budget_period" gorm:"type:varchar(16);default:''"`
+	BudgetWindowStart int64  `json:"budget_window_start" gorm:"bigint;default:0"`
+	BudgetUsed        int    `json:"budget_used" gorm:"default:0"`
+
 	AllowUserQuotaQuery bool   `json:"allow_user_quota_query"`
 	CacheExpiresAt      int64  `json:"-" gorm:"-"`
 	CacheMAC            string `json:"-" gorm:"-"`
@@ -318,7 +325,8 @@ func (token *Token) Update() (err error) {
 	}
 	return DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
 		"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry", "auto_groups",
-		"allow_user_quota_query").Updates(token).Error
+		"allow_user_quota_query", "budget_quota", "budget_period", "budget_window_start", "budget_used").
+		Updates(token).Error
 }
 
 func (token *Token) SelectUpdate() (err error) {

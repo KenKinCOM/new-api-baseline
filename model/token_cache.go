@@ -15,6 +15,9 @@ func (token Token) cacheMAC() (string, error) {
 	token.RemainQuota = 0
 	token.UsedQuota = 0
 	token.AccessedTime = 0
+	// G-06：budget_used 每笔请求都会变，和 remain/used 一样是计数器，
+	// 不参与 MAC，否则每次回写都会让缓存失效。
+	token.BudgetUsed = 0
 	if token.AllowIps != nil && *token.AllowIps == "" {
 		token.AllowIps = nil
 	}
@@ -109,8 +112,9 @@ redis.call('HSET', KEYS[1],
   'UnlimitedQuota', ARGV[8], 'ModelLimitsEnabled', ARGV[9], 'ModelLimits', ARGV[10],
   'AllowIps', ARGV[11], 'Group', ARGV[12], 'CrossGroupRetry', ARGV[13],
   'AutoGroups', ARGV[14], 'AllowUserQuotaQuery', ARGV[17],
+  'BudgetQuota', ARGV[23], 'BudgetPeriod', ARGV[24], 'BudgetWindowStart', ARGV[25],
   'CacheExpiresAt', ARGV[19], 'CacheMAC', ARGV[20])
-for _, counter in ipairs({{'AccessedTime', ARGV[6]}, {'RemainQuota', ARGV[15]}, {'UsedQuota', ARGV[16]}}) do
+for _, counter in ipairs({{'AccessedTime', ARGV[6]}, {'RemainQuota', ARGV[15]}, {'UsedQuota', ARGV[16]}, {'BudgetUsed', ARGV[26]}}) do
   if not string.match(redis.call('HGET', KEYS[1], counter[1]) or '', '^-?%d+$') then
     redis.call('HSET', KEYS[1], counter[1], counter[2])
   end
@@ -132,6 +136,7 @@ return 1`
 		strconv.FormatBool(token.AllowUserQuotaQuery),
 		tokenCacheTTLSeconds(),
 		token.CacheExpiresAt, mac, strconv.FormatBool(repair), existing.CacheMAC,
+		token.BudgetQuota, token.BudgetPeriod, token.BudgetWindowStart, token.BudgetUsed,
 	).Int()
 }
 
