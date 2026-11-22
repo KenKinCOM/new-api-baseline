@@ -280,11 +280,15 @@ func TestRechargeEpayRejectsForeignAndNonPendingOrders(t *testing.T) {
 		assert.Equal(t, 7, getUserQuotaForPaymentGuardTest(t, user.Id))
 	})
 
-	t.Run("order that is not pending", func(t *testing.T) {
+	t.Run("expired order is still credited by a late callback", func(t *testing.T) {
 		order := createEpayTestOrder(t, user.Id, "EPAYTESTEXPIRED", PaymentProviderEpay, common.TopUpStatusExpired)
-		_, err := RechargeEpay(order.TradeNo, "alipay", "127.0.0.1")
-		assert.ErrorIs(t, err, ErrTopUpStatusInvalid)
-		assert.Equal(t, 7, getUserQuotaForPaymentGuardTest(t, user.Id))
+		alreadyDone, err := RechargeEpay(order.TradeNo, "alipay", "127.0.0.1")
+		require.NoError(t, err)
+		assert.False(t, alreadyDone)
+		assert.Equal(t, 7+2*500000, getUserQuotaForPaymentGuardTest(t, user.Id))
+		reloaded := GetTopUpByTradeNo(order.TradeNo)
+		require.NotNil(t, reloaded)
+		assert.Equal(t, common.TopUpStatusSuccess, reloaded.Status)
 	})
 
 	t.Run("missing order", func(t *testing.T) {
