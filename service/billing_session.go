@@ -37,6 +37,9 @@ type BillingSession struct {
 	fundingSettled   bool   // funding.Settle 已成功，资金来源已提交
 	settled          bool   // Settle 全部完成（资金 + 令牌）
 	refunded         bool   // Refund 已调用
+	budgetChecked    bool   // 已确认过令牌是否配置周期预算（G-06）
+	budgetEnabled    bool   // 令牌配置了周期预算
+	budgetReserved   int    // 本次请求在本周期预算上占用的额度（G-06）
 	lang             string // 请求声明的语言，为空表示未声明
 	mu               sync.Mutex
 }
@@ -51,9 +54,11 @@ func (s *BillingSession) Settle(actualQuota int) error {
 		return nil
 	}
 	delta := actualQuota - s.preConsumedQuota
+	// G-06：预算账独立于资金/令牌账，先按实际用量收敛（即使下面提前返回也不会漏账）。
+	budgetErr := s.settleTokenBudget(actualQuota)
 	if delta == 0 {
 		s.settled = true
-		return nil
+		return budgetErr
 	}
 	// 1) 调整资金来源（仅在尚未提交时执行，防止重复调用）
 	if !s.fundingSettled {
@@ -87,7 +92,10 @@ func (s *BillingSession) Settle(actualQuota int) error {
 		s.relayInfo.SubscriptionPostDelta += int64(delta)
 	}
 	s.settled = true
-	return tokenErr
+	if tokenErr != nil {
+		return tokenErr
+	}
+	return budgetErr
 }
 
 // Refund 退还所有预扣费，幂等安全，异步执行。
@@ -114,6 +122,9 @@ func (s *BillingSession) Refund(c *gin.Context) {
 	extraReserved := s.extraReserved
 	subscriptionId := s.relayInfo.SubscriptionId
 	funding := s.funding
+
+	// G-06：请求失败要把预算占用一起退回，否则失败请求会吃掉本周期额度。
+	s.releaseTokenBudget()
 
 	gopool.Go(func() {
 		// 1) 退还资金来源
@@ -187,6 +198,10 @@ func (s *BillingSession) reserve(targetQuota int, requireAvailableQuota bool) er
 		return nil
 	}
 
+	// G-06：补扣同样要过预算判定，且必须在动资金之前，失败时无需回滚。
+	if apiErr := s.reserveTokenBudget(delta); apiErr != nil {
+		return apiErr
+	}
 	if err := s.reserveFunding(delta, requireAvailableQuota); err != nil {
 		return err
 	}
@@ -230,6 +245,13 @@ func quotaExhaustedOption(remaining, required int) types.NewAPIErrorOptions {
 // 任一步骤失败时原子回滚已完成的步骤。
 func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIError {
 	effectiveQuota := quota
+
+	// ---- 0) 令牌周期预算（G-06）----
+	// 预算判定必须发生在信任旁路之前、并且使用原始预估值：信任旁路只是
+	// 「不预扣余额」，不是「不花预算」，否则大余额用户会直接绕过令牌预算。
+	if apiErr := s.reserveTokenBudget(quota); apiErr != nil {
+		return apiErr
+	}
 
 	// ---- 信任额度旁路 ----
 	if s.shouldTrust(c) {

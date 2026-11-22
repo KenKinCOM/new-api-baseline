@@ -505,6 +505,12 @@ func postConsumeQuotaWithResult(relayInfo *relaycommon.RelayInfo, quota int, pre
 		result.TokenApplied = true
 	}
 
+	// G-06：无预扣的直接计费路径（实时语音逐条计费、旧差额路径、违规扣费）
+	// 也要进令牌预算账；这些路径没有预扣点，只能按实际发生额入账。
+	if quota > 0 {
+		recordTokenBudgetDirectCharge(relayInfo, quota)
+	}
+
 	if sendEmail {
 		if (quota + preConsumedQuota) != 0 {
 			checkAndSendQuotaNotify(relayInfo, quota, preConsumedQuota)

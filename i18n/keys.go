@@ -37,6 +37,9 @@ const (
 
 	MsgQuotaUserInsufficient             = "quota.user_insufficient"
 	MsgQuotaPreConsumeInsufficient       = "quota.pre_consume_insufficient"
+	MsgQuotaTokenBudgetExhausted         = "quota.token_budget_exhausted"
+	MsgQuotaBudgetPeriodDaily            = "quota.budget_period.daily"
+	MsgQuotaBudgetPeriodMonthly          = "quota.budget_period.monthly"
 	MsgQuotaSubscriptionInsufficient     = "quota.subscription_insufficient"
 	MsgRelayModelPriceNotConfigured      = "relay.model_price_not_configured"
 	MsgRelayModelPriceNotConfiguredAdmin = "relay.model_price_not_configured_admin"

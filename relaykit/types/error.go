@@ -88,6 +88,10 @@ const (
 	// quota error
 	ErrorCodeInsufficientUserQuota      ErrorCode = "insufficient_user_quota"
 	ErrorCodePreConsumeTokenQuotaFailed ErrorCode = "pre_consume_token_quota_failed"
+	// G-06: the token's periodic budget is exhausted. Distinct from
+	// insufficient_user_quota on purpose: the account still has balance, the
+	// token just hit its own per-period cap, and the limit resets on its own.
+	ErrorCodeTokenBudgetExhausted ErrorCode = "token_budget_exhausted"
 )
 
 type NewAPIError struct {
@@ -420,15 +424,52 @@ func ErrOptionWithQuotaInfo(remaining, required int, resetAt int64) NewAPIErrorO
 		if resetAt > 0 {
 			fields["reset_at"] = resetAt
 		}
-		payload, err := json.Marshal(fields)
-		if err != nil {
+		setErrorMetadata(e, fields)
+	}
+}
+
+// ErrOptionWithBudgetInfo attaches the periodic-budget facts to the error
+// envelope so a client can tell "my token hit its own daily/monthly cap" apart
+// from "my account balance is gone". reason is the machine-readable marker
+// (always "token_budget_exhausted" here); limit/used/remaining/period/reset_at
+// describe the cap and when it lifts.
+func ErrOptionWithBudgetInfo(limit, used, required int, period string, resetAt int64) NewAPIErrorOptions {
+	return func(e *NewAPIError) {
+		if e == nil {
 			return
 		}
-		e.Metadata = payload
-		if openAIError, ok := e.RelayError.(OpenAIError); ok {
-			openAIError.Metadata = payload
-			e.RelayError = openAIError
+		remaining := limit - used
+		if remaining < 0 {
+			remaining = 0
 		}
+		fields := map[string]any{
+			"reason":    "token_budget_exhausted",
+			"limit":     limit,
+			"used":      used,
+			"remaining": remaining,
+		}
+		if required > 0 {
+			fields["required"] = required
+		}
+		if period != "" {
+			fields["period"] = period
+		}
+		if resetAt > 0 {
+			fields["reset_at"] = resetAt
+		}
+		setErrorMetadata(e, fields)
+	}
+}
+
+func setErrorMetadata(e *NewAPIError, fields map[string]any) {
+	payload, err := json.Marshal(fields)
+	if err != nil {
+		return
+	}
+	e.Metadata = payload
+	if openAIError, ok := e.RelayError.(OpenAIError); ok {
+		openAIError.Metadata = payload
+		e.RelayError = openAIError
 	}
 }
 
