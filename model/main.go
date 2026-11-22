@@ -387,6 +387,7 @@ func migrateDB() error {
 		&TopUpReconcileDiff{},
 		&BillingReconcileSnapshot{},
 		&BillingReconcileDiff{},
+		&IdempotencyKey{},
 		&CasbinRule{},
 		&AuthzRole{},
 		&UserAccessToken{},
