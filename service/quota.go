@@ -292,8 +292,18 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 }
 
 func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []*common.Message) {
+	// G-09 (audio path): the same rule as the text path — absent usage and an
+	// all-zero usage both mean "upstream reported nothing", so bill the
+	// estimated input tokens instead of settling the request at 0.
+	usageMissing := false
+	if usageHasNoBillableTokens(usage) {
+		if estimated := relayInfo.GetEstimatePromptTokens(); estimated > 0 {
+			usage = &dto.Usage{PromptTokens: estimated, TotalTokens: estimated}
+			usageMissing = true
+		}
+	}
 	if usage == nil {
-		usage = &dto.Usage{PromptTokens: relayInfo.GetEstimatePromptTokens(), TotalTokens: relayInfo.GetEstimatePromptTokens()}
+		usage = &dto.Usage{}
 	}
 
 	var tieredUsedVars map[string]bool
@@ -372,6 +382,9 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		logger.LogError(ctx, common.LogText("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d",
 			relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, billingModelName, relayInfo.FinalPreConsumedQuota))
 	} else {
+		if usageMissing {
+			logContent = append(logContent, common.NewMessage("Upstream returned no usage; charged {{quota}} from the estimated input tokens", map[string]any{"quota": logger.FormatQuota(quota)}))
+		}
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
@@ -384,6 +397,9 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	logContent = append(logContent, extraContent...)
 	other := GenerateAudioOtherInfo(ctx, relayInfo, usage, modelRatio, groupRatio,
 		completionRatio.InexactFloat64(), audioRatio.InexactFloat64(), audioCompletionRatio.InexactFloat64(), modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+	if usageMissing {
+		other.SetPublic("usage_missing", true)
+	}
 	if tieredResult != nil {
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
 	}
