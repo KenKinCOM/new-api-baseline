@@ -37,6 +37,16 @@ RUN apt-get update \
 
 COPY --from=builder2 /build/new-api /
 COPY LICENSE NOTICE THIRD-PARTY-LICENSES.md /licenses/
+
+# 非 root 运行（T4 §4.5 #11）：/data 是唯一需要写的目录（SQLite 库 + ./logs）。
+# UID/GID 固定为 10001，便于宿主机数据盘按号授权，避免依赖用户名。
+RUN groupadd --system --gid 10001 newapi \
+    && useradd --system --uid 10001 --gid 10001 --home-dir /data --shell /usr/sbin/nologin newapi \
+    && mkdir -p /data/logs \
+    && chown -R 10001:10001 /data \
+    && chmod 0750 /data
+
 EXPOSE 3000
 WORKDIR /data
+USER 10001:10001
 ENTRYPOINT ["/new-api"]
