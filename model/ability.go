@@ -247,6 +247,9 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 		}
 	}
 	if len(abilities) == 0 {
+		// 0 条能力行意味着这条渠道永远不会被选中。控制器层已在保存前拒绝空
+		// 模型列表（T3 G1），这里再留一条日志，避免其它写入路径静默成功。
+		common.SysLog(common.LogText("channel %q (#%d) produced no ability rows: models=%q groups=%q", channel.Name, channel.Id, channel.Models, channel.Group))
 		return nil
 	}
 	// choose DB or provided tx

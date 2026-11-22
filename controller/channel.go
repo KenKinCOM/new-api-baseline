@@ -23,6 +23,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/request_plugin_setting"
 
 	"github.com/gin-gonic/gin"
@@ -576,6 +577,49 @@ func normalizePluginConfig(channel *model.Channel, plugin *jsplugin.LoadedPlugin
 	return nil
 }
 
+// validateChannelModelList 校验渠道的模型列表。
+// 模型名是渠道唯一的选路入口：列表为空（或含空项）时 AddAbilities 只生成 0 条
+// 能力行并返回 nil，接口照旧回 success，渠道于是"保存成功但永远选不到"。
+// 这里把这种情况挡在保存之前，并说明原因（T3 G1）。
+func validateChannelModelList(channel *model.Channel) error {
+	models := channel.GetModels()
+	if len(models) == 0 {
+		return common.NewMessage("Channel models cannot be empty: a channel with no model never gets selected")
+	}
+	for _, m := range models {
+		if strings.TrimSpace(m) == "" {
+			return common.NewMessage("Model name cannot be empty: check the separators in the model list")
+		}
+		if len(m) > 255 {
+			return common.NewMessage("Model name is too long: {{model}}", map[string]any{"model": m})
+		}
+	}
+	return nil
+}
+
+// channelModelNameWarnings 列出渠道声明了但没有配置倍率/价格的模型。
+// 这类模型能选路却算不出价，保存仍然成功，因此以 warning 形式当场返回（T3 G1）。
+func channelModelNameWarnings(channel *model.Channel) []string {
+	models := channel.GetModels()
+	warnings := make([]string, 0)
+	seen := make(map[string]struct{}, len(models))
+	for _, raw := range models {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			warnings = append(warnings, fmt.Sprintf("model %q is listed more than once", name))
+			continue
+		}
+		seen[name] = struct{}{}
+		if _, _, exists := ratio_setting.GetModelRatioOrPrice(name); !exists {
+			warnings = append(warnings, fmt.Sprintf("model %q has no billing ratio or price configured; requests routed to it cannot be priced", name))
+		}
+	}
+	return warnings
+}
+
 // validateChannel 通用的渠道校验函数
 func validateChannel(channel *model.Channel, isAdd bool) error {
 	if channel == nil {
@@ -688,11 +732,9 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 			return err
 		}
 
-		// 检查模型名称长度是否超过 255
-		for _, m := range channel.GetModels() {
-			if len(m) > 255 {
-				return common.NewMessage("Model name is too long: {{model}}", map[string]any{"model": m})
-			}
+		// 模型列表是渠道唯一的选路入口：为空/写错时不允许保存（T3 G1）
+		if err := validateChannelModelList(channel); err != nil {
+			return err
 		}
 	}
 
@@ -958,6 +1000,15 @@ func AddChannel(c *gin.Context) {
 		}
 	}
 	data := gin.H{"ids": ids, "results": results}
+	// 模型名没有倍率/价格时渠道能选路却算不出价：保存不拦，但当场把原因带回（T3 G1）。
+	if warnings := channelModelNameWarnings(addChannelRequest.Channel); len(warnings) > 0 {
+		firstId := 0
+		if len(ids) > 0 {
+			firstId = ids[0]
+		}
+		common.SysLog(common.LogText("channel %q (#%d) saved with model warnings: %s", addChannelRequest.Channel.Name, firstId, strings.Join(warnings, "; ")))
+		data["warnings"] = warnings
+	}
 	if len(ids) == 1 {
 		data["id"] = ids[0]
 	}
