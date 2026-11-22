@@ -375,6 +375,7 @@ func migrateDB() error {
 		&SystemTaskLock{},
 		&QuotaLedger{},
 		&PaymentTradeNoClaim{},
+		&WebhookEvent{},
 		&CasbinRule{},
 		&AuthzRole{},
 		&UserAccessToken{},

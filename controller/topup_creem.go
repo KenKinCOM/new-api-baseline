@@ -268,6 +268,12 @@ func CreemWebhook(c *gin.Context) {
 
 	logger.LogInfo(c.Request.Context(), common.LogText("Creem webhook signature verified path=%q client_ip=%s", c.Request.RequestURI, c.ClientIP()))
 
+	// R4：先落回调证据，处理结果在分发结束时回填
+	creemOutcome := model.WebhookOutcomeRejected
+	creemRec := newWebhookRecorder(c, model.PaymentProviderCreem, bodyBytes, signature)
+	defer func() { creemRec.finish(creemOutcome, "") }()
+	creemRec.markVerified(true)
+
 	// 重新设置body供后续的ShouldBindJSON使用
 	c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
@@ -280,12 +286,15 @@ func CreemWebhook(c *gin.Context) {
 	}
 
 	logger.LogInfo(c.Request.Context(), common.LogText("Creem webhook parsed event_type=%s event_id=%s request_id=%s order_id=%s order_status=%s", webhookEvent.EventType, webhookEvent.Id, webhookEvent.Object.RequestId, webhookEvent.Object.Order.Id, webhookEvent.Object.Order.Status))
+	creemRec.setTradeNo(webhookEvent.Object.RequestId)
 
 	// 根据事件类型处理不同的webhook
 	switch webhookEvent.EventType {
 	case "checkout.completed":
 		handleCheckoutCompleted(c, &webhookEvent)
+		creemOutcome = model.WebhookOutcomeCredited
 	default:
+		creemOutcome = model.WebhookOutcomeIgnored
 		logger.LogInfo(c.Request.Context(), common.LogText("Creem webhook ignored event event_type=%s event_id=%s", webhookEvent.EventType, webhookEvent.Id))
 		c.Status(http.StatusOK)
 	}

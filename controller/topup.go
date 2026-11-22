@@ -455,6 +455,10 @@ func EpayNotify(c *gin.Context) {
 		}
 		return
 	}
+	// R4：先落回调证据（原始参数+来源 IP+签名串），再验签与处理
+	epayOutcome := model.WebhookOutcomeRejected
+	epayRec := newWebhookRecorder(c, model.PaymentProviderEpay, []byte(common.GetJsonString(params)), params["sign"])
+	defer func() { epayRec.finish(epayOutcome, "") }()
 	verifyInfo, err := client.Verify(params)
 	if err != nil || !verifyInfo.VerifyStatus {
 		if _, writeErr := c.Writer.Write([]byte("fail")); writeErr != nil {
@@ -468,6 +472,8 @@ func EpayNotify(c *gin.Context) {
 		return
 	}
 	logger.LogInfo(c.Request.Context(), common.LogText("Epay webhook signature verified trade_no=%s callback_type=%s trade_status=%s client_ip=%s verify_info=%q", verifyInfo.ServiceTradeNo, verifyInfo.Type, verifyInfo.TradeStatus, c.ClientIP(), common.GetJsonString(verifyInfo)))
+	epayRec.markVerified(true)
+	epayRec.setTradeNo(verifyInfo.ServiceTradeNo)
 
 	if verifyInfo.TradeStatus == epay.StatusTradeSuccess {
 		// R1：回调金额必须与本地订单一致，不一致拒绝入账（不吞单，留证后回 fail 等人工处理）
@@ -514,9 +520,11 @@ func EpayNotify(c *gin.Context) {
 		} else {
 			// R3：记录通道侧流水号（易支付订单号），供与通道后台逐笔对号
 			model.SetTopUpProviderTradeNo(verifyInfo.ServiceTradeNo, verifyInfo.TradeNo)
+			epayOutcome = model.WebhookOutcomeCredited
 			logger.LogInfo(c.Request.Context(), common.LogText("Epay top-up succeeded trade_no=%s callback_type=%s client_ip=%s", verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP()))
 		}
 	} else {
+		epayOutcome = model.WebhookOutcomeIgnored
 		logger.LogInfo(c.Request.Context(), common.LogText("Epay webhook ignored event trade_no=%s callback_type=%s trade_status=%s client_ip=%s verify_info=%q", verifyInfo.ServiceTradeNo, verifyInfo.Type, verifyInfo.TradeStatus, c.ClientIP(), common.GetJsonString(verifyInfo)))
 	}
 	if _, writeErr := c.Writer.Write([]byte("success")); writeErr != nil {

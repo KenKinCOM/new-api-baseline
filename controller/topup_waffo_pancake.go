@@ -486,6 +486,13 @@ func WaffoPancakeWebhook(c *gin.Context) {
 	rawTradeNo := strings.TrimSpace(event.Data.OrderMerchantExternalID)
 	isSubscription := strings.HasPrefix(rawTradeNo, "WAFFO_PANCAKE_SUB-")
 
+	// R4：先落回调证据（原始 body + X-Waffo-Signature + 来源 IP）
+	pancakeOutcome := model.WebhookOutcomeIgnored
+	pancakeRec := newWebhookRecorder(c, model.PaymentProviderWaffoPancake, bodyBytes, signature)
+	pancakeRec.markVerified(true)
+	pancakeRec.setTradeNo(rawTradeNo)
+	defer func() { pancakeRec.finish(pancakeOutcome, "") }()
+
 	// C1：先按通道侧订单号 ORD_* 做跨表认领，同一笔支付不允许既算订阅又算充值
 	if claimErr := model.ClaimPaymentTradeNo(model.PaymentProviderWaffoPancake, event.Data.OrderID, rawTradeNo, "auto"); claimErr != nil {
 		if errors.Is(claimErr, model.ErrPaymentTradeNoConflict) {
@@ -515,6 +522,7 @@ func WaffoPancakeWebhook(c *gin.Context) {
 			c.String(http.StatusInternalServerError, "retry")
 			return
 		}
+		pancakeOutcome = model.WebhookOutcomeCredited
 		logger.LogInfo(c.Request.Context(), common.LogText("Waffo Pancake subscription completed trade_no=%s event_id=%s order_id=%s client_ip=%s", tradeNo, event.ID, event.Data.OrderID, c.ClientIP()))
 		c.String(http.StatusOK, "OK")
 		return
@@ -550,6 +558,7 @@ func WaffoPancakeWebhook(c *gin.Context) {
 
 	// R3：记录通道侧订单号 ORD_*
 	model.SetTopUpProviderTradeNo(tradeNo, event.Data.OrderID)
+	pancakeOutcome = model.WebhookOutcomeCredited
 	logger.LogInfo(c.Request.Context(), common.LogText("Waffo Pancake top-up succeeded trade_no=%s event_id=%s order_id=%s client_ip=%s", tradeNo, event.ID, event.Data.OrderID, c.ClientIP()))
 	c.String(http.StatusOK, "OK")
 }

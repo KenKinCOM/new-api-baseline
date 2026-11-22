@@ -178,6 +178,10 @@ func StripeWebhook(c *gin.Context) {
 
 	signature := c.GetHeader("Stripe-Signature")
 	logger.LogInfo(ctx, common.LogText("Stripe webhook received request path=%q client_ip=%s signature=%q body=%q", c.Request.RequestURI, c.ClientIP(), signature, string(payload)))
+	// R4：先落回调证据，处理结果在分发结束时回填
+	stripeOutcome := model.WebhookOutcomeIgnored
+	stripeRec := newWebhookRecorder(c, model.PaymentProviderStripe, payload, signature)
+	defer func() { stripeRec.finish(stripeOutcome, "") }()
 	event, err := webhook.ConstructEventWithOptions(payload, signature, setting.StripeWebhookSecret, webhook.ConstructEventOptions{
 		IgnoreAPIVersionMismatch: true,
 	})
@@ -189,13 +193,17 @@ func StripeWebhook(c *gin.Context) {
 	}
 
 	callerIp := c.ClientIP()
+	stripeRec.markVerified(true)
+	stripeRec.setTradeNo(event.GetObjectValue("client_reference_id"))
 	logger.LogInfo(ctx, common.LogText("Stripe webhook signature verified event_type=%s client_ip=%s path=%q", string(event.Type), callerIp, c.Request.RequestURI))
 	switch event.Type {
 	case stripe.EventTypeCheckoutSessionCompleted:
+		stripeOutcome = model.WebhookOutcomeCredited
 		sessionCompleted(ctx, event, callerIp)
 	case stripe.EventTypeCheckoutSessionExpired:
 		sessionExpired(ctx, event)
 	case stripe.EventTypeCheckoutSessionAsyncPaymentSucceeded:
+		stripeOutcome = model.WebhookOutcomeCredited
 		sessionAsyncPaymentSucceeded(ctx, event, callerIp)
 	case stripe.EventTypeCheckoutSessionAsyncPaymentFailed:
 		sessionAsyncPaymentFailed(ctx, event, callerIp)

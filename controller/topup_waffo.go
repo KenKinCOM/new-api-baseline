@@ -383,9 +383,18 @@ func WaffoWebhook(c *gin.Context) {
 			return
 		}
 		logger.LogInfo(c.Request.Context(), common.LogText("Waffo webhook verified and parsed event_type=%s merchant_order_id=%s order_status=%s client_ip=%s", event.EventType, payload.Result.MerchantOrderID, payload.Result.OrderStatus, c.ClientIP()))
+		// R4：验签通过后落回调证据，单号取商户订单号
+		waffoOutcome := model.WebhookOutcomeCredited
+		waffoRec := newWebhookRecorder(c, model.PaymentProviderWaffo, bodyBytes, signature)
+		waffoRec.markVerified(true)
+		waffoRec.setTradeNo(payload.Result.MerchantOrderID)
+		defer func() { waffoRec.finish(waffoOutcome, "") }()
 		handleWaffoPayment(c, wh, &payload.Result.PaymentNotificationResult)
 	default:
 		logger.LogInfo(c.Request.Context(), common.LogText("Waffo webhook ignored event event_type=%s client_ip=%s", event.EventType, c.ClientIP()))
+		waffoIgnored := newWebhookRecorder(c, model.PaymentProviderWaffo, bodyBytes, signature)
+		waffoIgnored.markVerified(true)
+		waffoIgnored.finish(model.WebhookOutcomeIgnored, "")
 		sendWaffoWebhookResponse(c, wh, true, "")
 	}
 }
