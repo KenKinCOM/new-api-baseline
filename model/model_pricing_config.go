@@ -83,6 +83,36 @@ func ModelPricingVersion(values PricingValues) string {
 	return fmt.Sprintf("%x", sha256.Sum256(encoded))
 }
 
+// CurrentPricingVersion returns a digest of the pricing tables currently loaded
+// in this process: the per-token ratio maps, the group ratios, the tiered
+// billing mode/expression tables and the quota conversion coefficient.
+//
+// Consume logs record it (logs.other.pricing_version) so a historical charge
+// can be attributed to the exact pricing table generation that produced it,
+// and /api/pricing returns the same value. It is deliberately a table-wide
+// digest rather than a per-model one: a per-model digest would need the
+// persisted option rows on every request, while the relay path must not read
+// the database per request. Any pricing edit therefore bumps the version for
+// all models, which is the granularity needed to answer "which pricing table
+// was in force for this log".
+func CurrentPricingVersion() string {
+	return ModelPricingVersion(PricingValues{
+		"GroupRatio":                            ratio_setting.GetGroupRatioCopy(),
+		"ModelRatio":                            ratio_setting.GetModelRatioCopy(),
+		"ModelPrice":                            ratio_setting.GetModelPriceCopy(),
+		"CompletionRatio":                       ratio_setting.GetCompletionRatioCopy(),
+		"CacheRatio":                            ratio_setting.GetCacheRatioCopy(),
+		"CreateCacheRatio":                      ratio_setting.GetCreateCacheRatioCopy(),
+		"ImageRatio":                            ratio_setting.GetImageRatioCopy(),
+		"AudioRatio":                            ratio_setting.GetAudioRatioCopy(),
+		"AudioCompletionRatio":                  ratio_setting.GetAudioCompletionRatioCopy(),
+		billing_setting.BillingModeField:        billing_setting.GetBillingModeCopy(),
+		billing_setting.BillingExprField:        billing_setting.GetBillingExprCopy(),
+		billing_setting.PluginBillingExprOption: billing_setting.GetPluginBillingExprCopy(),
+		"QuotaPerUnit":                          common.QuotaPerUnit,
+	})
+}
+
 func defaultPricingMaps() map[string]map[string]any {
 	result := make(map[string]map[string]any, len(modelPricingOptionKeys))
 	for _, key := range modelPricingOptionKeys {

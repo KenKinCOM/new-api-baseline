@@ -132,6 +132,13 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		other.SetPublic("is_system_prompt_overwritten", true)
 	}
 
+	// G-02: record which pricing table generation priced this request. Without
+	// it a historical charge cannot be attributed to the pricing scheme that
+	// produced it once prices are edited. The value is the same digest that
+	// /api/pricing returns, so a log line can be traced back to a published
+	// pricing snapshot.
+	other.SetPublic("pricing_version", model.CurrentPricingVersion())
+
 	AppendRelayLogAdminInfo(ctx, relayInfo, other)
 	AppendResponseModelLogInfo(relayInfo, other)
 	appendRequestPath(ctx, relayInfo, other)
@@ -349,6 +356,7 @@ func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData hosttypes.P
 	if ratios := priceData.OtherRatios(); len(ratios) > 0 {
 		other.SetPublic("other_ratios", ratios)
 	}
+	other.SetPublic("pricing_version", model.CurrentPricingVersion())
 	appendRequestPath(nil, relayInfo, other)
 	appendRequestPluginRecord(relayInfo, other)
 	return other
