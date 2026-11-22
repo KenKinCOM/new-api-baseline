@@ -722,6 +722,13 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		return fmt.Errorf("SGLang channel base URL cannot be empty")
 	}
 
+	// 模型列表是渠道唯一的选路入口，新增与编辑都必须给出（T3 G1/G5）。
+	// 编辑路径此前整段校验包在 if isAdd 内：把在用渠道的 models 改成空串也能
+	// 保存成功，UpdateAbilities 先删后建 0 条且不报错，渠道当场变成零能力。
+	if err := validateChannelModelList(channel); err != nil {
+		return err
+	}
+
 	// 如果是添加操作，检查 channel 和 key 是否为空
 	if isAdd {
 		// A channel of a plugin that logs in may start without a key.
@@ -729,11 +736,6 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 			return fmt.Errorf("channel cannot be empty")
 		}
 		if err := service.CheckSubmittedPluginCredentials(channel.Type, channel.GetSetting().TaskPluginKey, channel.Key, ""); err != nil {
-			return err
-		}
-
-		// 模型列表是渠道唯一的选路入口：为空/写错时不允许保存（T3 G1）
-		if err := validateChannelModelList(channel); err != nil {
 			return err
 		}
 	}
@@ -1525,13 +1527,20 @@ func UpdateChannel(c *gin.Context) {
 		updateAudit["base_url_source"] = "plugin_default"
 	}
 	recordManageAudit(c, "channel.update", updateAudit)
+	// 编辑同样把"能选路但算不出价"的模型名当场带回（T3 G5）。
+	warnings := channelModelNameWarnings(&channel.Channel)
 	channel.Key = ""
 	clearChannelInfo(&channel.Channel)
-	c.JSON(http.StatusOK, gin.H{
+	response := gin.H{
 		"success": true,
 		"message": "",
 		"data":    channel,
-	})
+	}
+	if len(warnings) > 0 {
+		common.SysLog(common.LogText("channel %q (#%d) updated with model warnings: %s", channel.Name, channel.Id, strings.Join(warnings, "; ")))
+		response["warnings"] = warnings
+	}
+	c.JSON(http.StatusOK, response)
 	return
 }
 
