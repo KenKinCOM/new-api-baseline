@@ -1,0 +1,25 @@
+# 双保险轮转的注意事项（C-06）
+#
+# 程序自身已按 LOG_MAX_SIZE_MB / LOG_RETENTION_DAYS / LOG_MAX_BACKUPS 轮转并清理
+# ./logs/oneapi-*.log（见 logger/logfile.go）。在容器里再挂 logrotate 会造成
+# 「同一批文件被两边按不同规则处理」，容易出现窗口期丢日志。
+#
+# 两种部署只选一种：
+#   1) 容器 / 单机跑二进制：依赖程序自身轮转（默认，无需本文件）
+#   2) 必须接管给系统 logrotate（例如要转发到 SLS 前先归档）：把
+#      LOG_MAX_SIZE_MB=0 关掉程序内轮转，再安装下面这份配置
+#
+# 安装：sudo cp deploy/logrotate/new-api.logrotate /etc/logrotate.d/new-api
+# 校验：sudo logrotate -d /etc/logrotate.d/new-api
+
+/var/lib/new-api/logs/oneapi-*.log {
+    daily
+    rotate 14
+    size 200M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su newapi newapi
+}

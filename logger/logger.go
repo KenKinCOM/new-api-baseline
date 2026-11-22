@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -29,14 +28,17 @@ const maxLogCount = 1000000
 var logCount int
 var setupLogLock sync.Mutex
 var setupLogWorking bool
-var currentLogPath string
 var currentLogPathMu sync.RWMutex
-var currentLogFile *os.File
+var currentLogWriter *RotatingFileWriter
 
 func GetCurrentLogPath() string {
 	currentLogPathMu.RLock()
-	defer currentLogPathMu.RUnlock()
-	return currentLogPath
+	writer := currentLogWriter
+	currentLogPathMu.RUnlock()
+	if writer == nil {
+		return ""
+	}
+	return writer.Path()
 }
 
 func SetupLogger() {
@@ -52,24 +54,25 @@ func SetupLogger() {
 		defer func() {
 			setupLogLock.Unlock()
 		}()
-		logPath := filepath.Join(*common.LogDir, fmt.Sprintf("oneapi-%s.log", time.Now().Format("20060102150405")))
-		fd, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		// Size-capped + retention-pruned writer (see logger/logfile.go). The
+		// previous implementation opened one timestamped file per start and never
+		// rotated or pruned, so a long-running process filled the disk.
+		writer, err := NewRotatingFileWriter(*common.LogDir)
 		if err != nil {
-			log.Fatal(common.LogText("failed to open log file"))
+			log.Fatal(common.LogText("failed to open log file: %s", err.Error()))
 		}
 		currentLogPathMu.Lock()
-		oldFile := currentLogFile
-		currentLogPath = logPath
-		currentLogFile = fd
+		oldWriter := currentLogWriter
+		currentLogWriter = writer
 		currentLogPathMu.Unlock()
 
 		common.LogWriterMu.Lock()
-		gin.DefaultWriter = io.MultiWriter(os.Stdout, fd)
-		gin.DefaultErrorWriter = io.MultiWriter(os.Stderr, fd)
-		if oldFile != nil {
-			_ = oldFile.Close()
-		}
+		gin.DefaultWriter = io.MultiWriter(os.Stdout, writer)
+		gin.DefaultErrorWriter = io.MultiWriter(os.Stderr, writer)
 		common.LogWriterMu.Unlock()
+		if oldWriter != nil {
+			_ = oldWriter.Close()
+		}
 	}
 }
 
