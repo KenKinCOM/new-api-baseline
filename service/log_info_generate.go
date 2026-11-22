@@ -375,6 +375,12 @@ func InjectTieredBillingInfo(other *model.LogOther, relayInfo *relaycommon.Relay
 	}
 	other.SetPublic("billing_mode", "tiered_expr")
 	other.SetPublic("expr_b64", base64.StdEncoding.EncodeToString([]byte(snap.ExprString)))
+	// G-03: expr_b64 alone forces a reader to decode and re-hash the expression
+	// to find out which expression version priced the request. Record the hash
+	// and the version next to it so a recompute can verify it used the same
+	// expression.
+	other.SetPublic("expr_hash", snap.ExprHash)
+	other.SetPublic("expr_version", snap.ExprVersion)
 	if result != nil {
 		if tokens := result.BillingTokens; tokens != nil && result.BillingUnit == billingexpr.BillingUnitToken {
 			other.SetPublic("image_cache_tokens", tokens.ImgCR)
