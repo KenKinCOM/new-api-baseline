@@ -47,6 +47,11 @@ export const apiKeySchema = z.object({
   model_limits: z.string().nullish().default(''),
   allow_ips: z.string().nullish().default(''),
   allow_user_quota_query: z.boolean().optional().default(false),
+  // G-06 周期预算：budget_quota<=0 表示未启用；budget_used 为本周期已用量。
+  budget_quota: z.number().nullish(),
+  budget_period: z.string().nullish(),
+  budget_used: z.number().nullish(),
+  budget_window_start: z.number().nullish(),
 })
 
 export type ApiKey = z.infer<typeof apiKeySchema>
@@ -96,6 +101,8 @@ export interface ApiKeyFormData {
   group: string
   auto_groups: string[]
   cross_group_retry: boolean
+  budget_quota: number
+  budget_period: string
 }
 
 export interface TokenAutoGroupsConfig {

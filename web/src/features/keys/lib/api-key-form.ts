@@ -45,6 +45,8 @@ export function getApiKeyFormSchema(t: TFunction, maxAutoGroups = 5) {
       auto_groups_mode: z.enum(['inherit', 'custom']),
       auto_groups: z.array(z.string()),
       cross_group_retry: z.boolean().optional(),
+      budget_quota_dollars: z.number().optional(),
+      budget_period: z.enum(['', 'daily', 'monthly']),
       tokenCount: z.number().min(1).optional(),
     })
     .superRefine((data, ctx) => {
@@ -77,6 +79,19 @@ export function getApiKeyFormSchema(t: TFunction, maxAutoGroups = 5) {
             code: 'custom',
             path: ['auto_groups'],
             message: t('Auto groups must not contain duplicates'),
+          })
+        }
+      }
+
+      if (data.budget_period !== '') {
+        if (
+          data.budget_quota_dollars === undefined ||
+          data.budget_quota_dollars <= 0
+        ) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['budget_quota_dollars'],
+            message: t('Budget limit must be greater than zero'),
           })
         }
       }
@@ -116,6 +131,8 @@ export const API_KEY_FORM_DEFAULT_VALUES: ApiKeyFormValues = {
   auto_groups_mode: 'inherit',
   auto_groups: [],
   cross_group_retry: true,
+  budget_quota_dollars: 0,
+  budget_period: '',
   tokenCount: 1,
 }
 
@@ -160,6 +177,10 @@ export function transformFormDataToPayload(
         ? data.auto_groups
         : [],
     cross_group_retry: data.group === 'auto' ? !!data.cross_group_retry : false,
+    budget_quota: data.budget_period
+      ? parseQuotaFromDollars(data.budget_quota_dollars || 0)
+      : 0,
+    budget_period: data.budget_period,
   }
 }
 
@@ -195,6 +216,8 @@ export function transformApiKeyToFormDefaults(
     auto_groups_mode: autoGroupsMode,
     auto_groups: autoGroups,
     cross_group_retry: !!apiKey.cross_group_retry,
+    budget_quota_dollars: quotaUnitsToDollars(apiKey.budget_quota ?? 0),
+    budget_period: (apiKey.budget_period ?? '') as ApiKeyFormValues['budget_period'],
     tokenCount: 1,
   }
 }

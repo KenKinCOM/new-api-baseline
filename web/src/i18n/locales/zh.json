@@ -1,5 +1,15 @@
 {
   "translation": {
+    "Periodic budget": "周期预算",
+    "Not enabled": "不启用",
+    "Daily": "每日",
+    "Monthly": "每月",
+    "Budget limit ({{currency}})": "预算上限（{{currency}}）",
+    "Enter budget limit in {{currency}}": "输入预算上限（{{currency}}）",
+    "Cap what this API key may spend per period. Requests over the cap are rejected until the period resets; it does not consume the key quota.": "限制该 API 密钥在每个周期内的消费金额。超过上限的请求会被拒绝，直到周期重置；预算不消耗密钥额度。",
+    "The budget resets automatically when the period rolls over.": "周期切换时预算自动重置。",
+    "Budget limit must be greater than zero": "预算上限必须大于 0",
+    "Budget usage (this period)": "本周期预算用量",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

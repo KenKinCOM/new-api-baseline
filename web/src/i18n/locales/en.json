@@ -1,5 +1,15 @@
 {
   "translation": {
+    "Periodic budget": "Periodic budget",
+    "Not enabled": "Not enabled",
+    "Daily": "Daily",
+    "Monthly": "Monthly",
+    "Budget limit ({{currency}})": "Budget limit ({{currency}})",
+    "Enter budget limit in {{currency}}": "Enter budget limit in {{currency}}",
+    "Cap what this API key may spend per period. Requests over the cap are rejected until the period resets; it does not consume the key quota.": "Cap what this API key may spend per period. Requests over the cap are rejected until the period resets; it does not consume the key quota.",
+    "The budget resets automatically when the period rolls over.": "The budget resets automatically when the period rolls over.",
+    "Budget limit must be greater than zero": "Budget limit must be greater than zero",
+    "Budget usage (this period)": "Budget usage (this period)",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

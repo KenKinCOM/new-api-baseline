@@ -35,6 +35,13 @@ import {
   sideDrawerSwitchItemClassName,
 } from '@/components/drawer-layout'
 import { MultiSelect } from '@/components/multi-select'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import {
   Collapsible,
@@ -369,6 +376,7 @@ export function ApiKeysMutateDrawer({
     : t('Enter quota in {{currency}}', { currency: currencyLabel })
   const autoGroupsMode = form.watch('auto_groups_mode')
   const unlimitedQuota = form.watch('unlimited_quota')
+  const budgetPeriod = form.watch('budget_period')
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -666,6 +674,74 @@ export function ApiKeysMutateDrawer({
                   </FormItem>
                 )}
               />
+
+              <FormField
+                control={form.control}
+                name='budget_period'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Periodic budget')}</FormLabel>
+                    <FormControl>
+                      <Select
+                        value={field.value}
+                        onValueChange={(value) => field.onChange(value ?? '')}
+                      >
+                        <SelectTrigger className='w-full'>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value=''>{t('Not enabled')}</SelectItem>
+                          <SelectItem value='daily'>{t('Daily')}</SelectItem>
+                          <SelectItem value='monthly'>{t('Monthly')}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Cap what this API key may spend per period. Requests over the cap are rejected until the period resets; it does not consume the key quota.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {budgetPeriod !== '' && (
+                <FormField
+                  control={form.control}
+                  name='budget_quota_dollars'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        {t('Budget limit ({{currency}})', {
+                          currency: currencyLabel,
+                        })}
+                      </FormLabel>
+                      <FormControl>
+                        <Input
+                          {...field}
+                          type='number'
+                          step={tokensOnly ? 1 : 0.01}
+                          placeholder={t('Enter budget limit in {{currency}}', {
+                            currency: currencyLabel,
+                          })}
+                          onChange={(e) =>
+                            field.onChange(
+                              Number.parseFloat(e.target.value) || 0
+                            )
+                          }
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          'The budget resets automatically when the period rolls over.'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
             </SideDrawerSection>
 
             <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>

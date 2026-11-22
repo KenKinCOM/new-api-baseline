@@ -86,6 +86,20 @@ export function ApiKeyQuotaCell(props: ApiKeyQuotaCellProps) {
       value: `${formattedPercentage}%`,
     })
   }
+  const budgetQuota = props.apiKey.budget_quota ?? 0
+  if (budgetQuota > 0) {
+    const budgetUsed = props.apiKey.budget_used ?? 0
+    const formattedBudgetUsed = formatQuotaWithCurrency(budgetUsed, {
+      showSymbol: false,
+    })
+    const formattedBudgetQuota = formatQuotaWithCurrency(budgetQuota, {
+      showSymbol: false,
+    })
+    details.push({
+      label: t('Budget usage (this period)'),
+      value: `${formattedBudgetUsed} / ${formattedBudgetQuota}`,
+    })
+  }
 
   return (
     <QuotaDetailsPopover
