@@ -323,6 +323,12 @@ func is64BitIntegerType(dbType common.DatabaseType, dataType string) bool {
 }
 
 func migrateDB() error {
+	// Versioned migration ledger (C-08). Additive: it records what this build
+	// applied so an operator can answer "which schema is this database on".
+	// Destructive down-migrations are intentionally not executed here.
+	if err := ensureMigrationVersionTable(DB); err != nil {
+		return fmt.Errorf("create schema_migrations: %w", err)
+	}
 	if err := migrateTokenKeyUniqueness(DB); err != nil {
 		return err
 	}
@@ -397,6 +403,15 @@ func migrateDB() error {
 		if err := DB.AutoMigrate(&SubscriptionPlan{}); err != nil {
 			return err
 		}
+	}
+	// Ledger bookkeeping runs last: the baseline row only exists once the
+	// AutoMigrate set above has completed, and registered migrations may depend
+	// on those tables.
+	if err := RecordLegacyBaseline(DB); err != nil {
+		return err
+	}
+	if err := RunPendingMigrations(DB); err != nil {
+		return err
 	}
 	return nil
 }
