@@ -366,6 +366,14 @@ func (s *BillingSession) syncRelayInfo() {
 	info := s.relayInfo
 	info.FinalPreConsumedQuota = s.preConsumedQuota
 	info.BillingSource = s.funding.Source()
+	// G-16: keep the trust-bypass decision on RelayInfo so the consume log can
+	// state why no quota was pre-consumed.
+	info.BillingTrusted = s.trusted
+	if s.trusted {
+		info.BillingTrustQuotaUSD = operation_setting.GetQuotaSetting().TrustQuotaUSD
+	} else {
+		info.BillingTrustQuotaUSD = 0
+	}
 
 	if sub, ok := s.funding.(*SubscriptionFunding); ok {
 		info.SubscriptionId = sub.subscriptionId

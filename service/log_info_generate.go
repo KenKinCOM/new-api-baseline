@@ -224,6 +224,13 @@ func appendBillingInfo(relayInfo *relaycommon.RelayInfo, other *model.LogOther) 
 	if relayInfo.BillingSource != "" {
 		other.SetPublic("billing_source", relayInfo.BillingSource)
 	}
+	// G-16: the trust bypass admits a request with preConsumedQuota=0. Record
+	// the decision and the threshold that allowed it, so "why was this request
+	// not pre-consumed" is answerable from the log after the fact.
+	if relayInfo.BillingTrusted {
+		other.SetPublic("trusted", true)
+		other.SetPublic("trust_quota_usd", relayInfo.BillingTrustQuotaUSD)
+	}
 	if relayInfo.UserSetting.BillingPreference != "" {
 		other.SetPublic("billing_preference", relayInfo.UserSetting.BillingPreference)
 	}
