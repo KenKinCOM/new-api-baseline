@@ -30,6 +30,8 @@ const (
 	SystemTaskTypeTopUpPendingCleanup = "topup_pending_cleanup"
 	// R6：充值/入账/流水三方日终对账
 	SystemTaskTypeTopUpReconcile = "topup_reconcile"
+	// G-12：消费侧三方日终对账（日志 / 用户账 / 渠道账）
+	SystemTaskTypeBillingReconcile = "billing_reconcile"
 
 	systemTaskCleanupBatchSize = 500
 )

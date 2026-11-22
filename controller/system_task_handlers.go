@@ -25,6 +25,35 @@ func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(systemTaskCleanupHandler{})
 	service.RegisterSystemTaskHandler(topUpPendingCleanupHandler{})
 	service.RegisterSystemTaskHandler(topUpReconcileHandler{})
+	service.RegisterSystemTaskHandler(billingReconcileHandler{})
+}
+
+// billingReconcileHandler 每日做一次消费侧三方对账（G-12）：
+// logs 的消费净额（type=2 减 type=6）、users.used_quota 增量、
+// channels.used_quota 增量三者比对，差异写入 billing_reconcile_diffs；
+// 无差异时不产任何行。窗口为「上一次快照 → 本次快照」，期末退后一个刷库周期，
+// 避免批量更新尚未落库造成假差异。
+type billingReconcileHandler struct{}
+
+func (billingReconcileHandler) Type() string { return model.SystemTaskTypeBillingReconcile }
+
+func (billingReconcileHandler) Enabled() bool { return true }
+
+func (billingReconcileHandler) Interval() time.Duration { return 24 * time.Hour }
+
+func (billingReconcileHandler) NewPayload() any { return nil }
+
+func (billingReconcileHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	if ctx.Err() != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, ctx.Err())
+		return
+	}
+	summary, err := model.RunBillingReconcile(model.BillingReconcileWindowEnd(time.Now()))
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, summary, err)
+		return
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
 }
 
 // topUpReconcileHandler 每日对「前一个自然日」做充值三方对账（R6）：
