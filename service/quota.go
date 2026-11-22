@@ -405,6 +405,19 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	relayInfo.PerformanceOutputTokens = int64(usage.CompletionTokens)
 }
 
+// TokenQuotaInsufficientError carries the machine-readable token quota
+// shortfall (remaining vs required) so callers can answer with a structured
+// 402 instead of parsing a formatted string.
+type TokenQuotaInsufficientError struct {
+	Remaining int
+	Required  int
+}
+
+func (e *TokenQuotaInsufficientError) Error() string {
+	return fmt.Sprintf("token quota is not enough, token remain quota: %s, need quota: %s",
+		logger.FormatQuota(e.Remaining), logger.FormatQuota(e.Required))
+}
+
 func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {
 	if quota < 0 {
 		return errors.New("quota cannot be negative")
@@ -422,7 +435,7 @@ func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {
 		if token, tokenErr := model.GetTokenByKey(relayInfo.TokenKey, false); tokenErr == nil && token != nil {
 			remainQuota = token.RemainQuota
 		}
-		return fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuota(remainQuota), logger.FormatQuota(quota))
+		return &TokenQuotaInsufficientError{Remaining: remainQuota, Required: quota}
 	}
 	return nil
 }
