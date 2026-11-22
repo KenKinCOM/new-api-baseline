@@ -176,13 +176,22 @@ func RunBillingReconcile(windowEnd int64) (*BillingReconcileSummary, error) {
 
 	// 累计口径：users 与 channels 都是终身累计标量，二者应当相等。日志累计
 	// 因清理不可比，所以累计口径只做「用户账 vs 渠道账」这一对。
+	// 累计差一旦产生就会一直存在，逐轮重复落行只会制造噪音：只在差值「首次
+	// 出现或发生变化」时记一行，后续轮次不重复。
 	if summary.UsersCumulativeQuota != summary.ChannelsCumulativeQuota {
-		row := newDiff(BillingReconcileKindUsersVsChannels, billingReconcileScopeCumulative)
-		row.UserQuota = summary.UsersCumulativeQuota
-		row.ChannelQuota = summary.ChannelsCumulativeQuota
-		row.DiffQuota = summary.UsersCumulativeQuota - summary.ChannelsCumulativeQuota
-		row.Message = "累计口径：users.used_quota 合计与 channels.used_quota 合计不等（实体删除、used_quota 被重置或漏记都会造成该差值）"
-		diffs = append(diffs, row)
+		cumulativeDiff := summary.UsersCumulativeQuota - summary.ChannelsCumulativeQuota
+		lastDiff, hasLastDiff, err := latestBillingReconcileCumulativeDiff()
+		if err != nil {
+			return nil, err
+		}
+		if !hasLastDiff || lastDiff != cumulativeDiff {
+			row := newDiff(BillingReconcileKindUsersVsChannels, billingReconcileScopeCumulative)
+			row.UserQuota = summary.UsersCumulativeQuota
+			row.ChannelQuota = summary.ChannelsCumulativeQuota
+			row.DiffQuota = cumulativeDiff
+			row.Message = "累计口径：users.used_quota 合计与 channels.used_quota 合计不等（实体删除、used_quota 被重置或漏记都会造成该差值；差值不变时不重复记行）"
+			diffs = append(diffs, row)
+		}
 	}
 
 	if prevAt > 0 && windowEnd <= prevAt {
@@ -322,6 +331,22 @@ func ListBillingReconcileDiffs(runDate string, limit int) ([]BillingReconcileDif
 	var rows []BillingReconcileDiff
 	err := query.Order("id desc").Limit(limit).Find(&rows).Error
 	return rows, err
+}
+
+// latestBillingReconcileCumulativeDiff 返回最近一次累计口径差异的差值，
+// 用于「差值不变就不重复记行」。
+func latestBillingReconcileCumulativeDiff() (int64, bool, error) {
+	var rows []BillingReconcileDiff
+	err := DB.Select("diff_quota").
+		Where("kind = ? AND scope = ?", BillingReconcileKindUsersVsChannels, billingReconcileScopeCumulative).
+		Order("id desc").Limit(1).Find(&rows).Error
+	if err != nil {
+		return 0, false, err
+	}
+	if len(rows) == 0 {
+		return 0, false, nil
+	}
+	return rows[0].DiffQuota, true, nil
 }
 
 func latestBillingReconcileSnapshotAt() (int64, error) {

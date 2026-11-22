@@ -169,6 +169,42 @@ func TestBillingReconcileDetectsOneUnitDifference(t *testing.T) {
 	assert.Equal(t, len(diffs), summary.DiffCount)
 }
 
+// 累计差一旦产生会一直存在：第二轮及以后不重复落行，避免每天一条同样的噪音。
+func TestBillingReconcileDoesNotRepeatCumulativeDiff(t *testing.T) {
+	setupBillingReconcileTest(t)
+	user, channel := seedBillingReconcileEntities(t, 100, 100)
+
+	_, err := RunBillingReconcile(billingReconcileTestBase)
+	require.NoError(t, err)
+
+	// 第一轮：日志 30、用户账 29、渠道账 30 → 累计差 -1，落一行累计差异
+	insertBillingReconcileLog(t, user.Id, channel.Id, LogTypeConsume, 30, billingReconcileTestBase+10)
+	bumpBillingReconcileUsage(t, user.Id, channel.Id, 29, 30)
+	_, err = RunBillingReconcile(billingReconcileTestBase + 100)
+	require.NoError(t, err)
+
+	var cumulativeCount int64
+	countCumulative := func() int64 {
+		var total int64
+		require.NoError(t, DB.Model(&BillingReconcileDiff{}).
+			Where("kind = ? AND scope = ?", BillingReconcileKindUsersVsChannels, billingReconcileScopeCumulative).
+			Count(&total).Error)
+		return total
+	}
+	cumulativeCount = countCumulative()
+	require.Equal(t, int64(1), cumulativeCount)
+
+	// 第二轮：日志 50、用户账 50、渠道账 50 → 当日无差异，累计差仍是 -1，不重复记行
+	insertBillingReconcileLog(t, user.Id, channel.Id, LogTypeConsume, 50, billingReconcileTestBase+110)
+	bumpBillingReconcileUsage(t, user.Id, channel.Id, 50, 50)
+	summary, err := RunBillingReconcile(billingReconcileTestBase + 200)
+	require.NoError(t, err)
+
+	assert.Equal(t, BillingReconcileStatusMatched, summary.Status)
+	assert.Equal(t, 0, summary.DiffCount)
+	assert.Equal(t, int64(1), countCumulative(), "累计差未变化时不应重复落行")
+}
+
 // 退款日志按净额（消费-退款）参与对账，退款当天不应产出假差异。
 func TestBillingReconcileNetsRefundLogs(t *testing.T) {
 	setupBillingReconcileTest(t)
