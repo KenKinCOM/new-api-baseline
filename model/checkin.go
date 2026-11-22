@@ -105,7 +105,8 @@ func userCheckinWithTransaction(checkin *Checkin, userId int, quotaAwarded int) 
 			return common.NewMessage("Check-in failed: quota update error")
 		}
 
-		return nil
+		// R7：签到入账此前只有 checkins 表、没有额度流水，无法轧账
+		return recordQuotaLedgerInTx(tx, userId, int64(quotaAwarded), QuotaLedgerTypeCheckin, "checkin", checkin.CheckinDate, "")
 	})
 
 	if err != nil {
@@ -134,6 +135,10 @@ func userCheckinWithoutTransaction(checkin *Checkin, userId int, quotaAwarded in
 		// 如果增加额度失败，需要回滚签到记录
 		DB.Delete(checkin)
 		return nil, common.NewMessage("Check-in failed: quota update error")
+	}
+	// R7：无事务分支（SQLite）补写额度流水，失败只记日志，不推翻已成功的签到
+	if err := recordQuotaLedgerInTx(DB, userId, int64(quotaAwarded), QuotaLedgerTypeCheckin, "checkin", checkin.CheckinDate, ""); err != nil {
+		common.SysError(common.LogText("failed to record checkin quota ledger user_id=%d: %s", userId, err.Error()))
 	}
 
 	return checkin, nil
