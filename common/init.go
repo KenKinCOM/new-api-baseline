@@ -50,17 +50,28 @@ func InitEnv() {
 	DefaultLanguage = os.Getenv("DEFAULT_LANGUAGE")
 	SetLogLanguage(DefaultLanguage)
 
-	if os.Getenv("SESSION_SECRET") != "" {
-		ss := os.Getenv("SESSION_SECRET")
-		if ss == "random_string" {
+	// Secrets may come from either the environment or a mounted file
+	// (SESSION_SECRET_FILE / CRYPTO_SECRET_FILE, see common/secret_source.go).
+	// file is preferred so the value never lands in `ps e`, unit files or
+	// `docker inspect`. Unset keeps the historical per-process random default.
+	sessionSecret, sessionOrigin := MustLoadSecret("SESSION_SECRET")
+	if sessionOrigin != SecretOriginUnset {
+		if sessionSecret == "random_string" {
 			log.Println(LogText("WARNING: SESSION_SECRET is set to the default value 'random_string', please change it to a random string."))
 			log.Fatal(LogText("Please set SESSION_SECRET to a random string."))
 		} else {
-			SessionSecret = ss
+			SessionSecret = sessionSecret
+			log.Println(LogText("SESSION_SECRET loaded from %s", sessionOrigin.String()))
 		}
 	}
-	if os.Getenv("CRYPTO_SECRET") != "" {
-		CryptoSecret = os.Getenv("CRYPTO_SECRET")
+	cryptoSecret, cryptoOrigin := MustLoadSecret("CRYPTO_SECRET")
+	if cryptoSecret == "random_string" {
+		log.Println(LogText("WARNING: CRYPTO_SECRET is set to the default value 'random_string', please change it to a random string."))
+		log.Fatal(LogText("Please set CRYPTO_SECRET to a random string."))
+	}
+	if cryptoOrigin != SecretOriginUnset {
+		CryptoSecret = cryptoSecret
+		log.Println(LogText("CRYPTO_SECRET loaded from %s", cryptoOrigin.String()))
 	} else {
 		CryptoSecret = SessionSecret
 	}
