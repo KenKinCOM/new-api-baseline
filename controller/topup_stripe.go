@@ -272,6 +272,14 @@ func sessionAsyncPaymentFailed(ctx context.Context, event stripe.Event, callerIp
 	logger.LogInfo(ctx, common.LogText("Stripe top-up order marked as failed trade_no=%s client_ip=%s", referenceId, callerIp))
 }
 
+// stripeProviderTradeNo 取通道侧支付号：优先 payment_intent，回落 checkout session id。
+func stripeProviderTradeNo(event stripe.Event) string {
+	if providerTradeNo := event.GetObjectValue("payment_intent"); providerTradeNo != "" {
+		return providerTradeNo
+	}
+	return event.GetObjectValue("id")
+}
+
 // fulfillOrder is the shared logic for crediting quota after payment is confirmed.
 func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, customerId string, callerIp string) {
 	if len(referenceId) == 0 {
@@ -281,6 +289,15 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 
 	LockOrder(referenceId)
 	defer UnlockOrder(referenceId)
+	// C1：先按通道侧支付号做跨表认领，同一笔支付不允许既算订阅又算充值
+	if claimErr := model.ClaimPaymentTradeNo(model.PaymentProviderStripe, stripeProviderTradeNo(event), referenceId, "auto"); claimErr != nil {
+		if errors.Is(claimErr, model.ErrPaymentTradeNoConflict) {
+			logger.LogWarn(ctx, common.LogText("Stripe payment already claimed by another order, skipped trade_no=%s client_ip=%s", referenceId, callerIp))
+			return
+		}
+		logger.LogError(ctx, common.LogText("Stripe payment claim failed trade_no=%s client_ip=%s error=%q", referenceId, callerIp, claimErr.Error()))
+		return
+	}
 	payload := map[string]any{
 		"customer":     customerId,
 		"amount_total": event.GetObjectValue("amount_total"),

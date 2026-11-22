@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -484,6 +485,18 @@ func WaffoPancakeWebhook(c *gin.Context) {
 	// OrderID is Pancake's internal ORD_* (logs only).
 	rawTradeNo := strings.TrimSpace(event.Data.OrderMerchantExternalID)
 	isSubscription := strings.HasPrefix(rawTradeNo, "WAFFO_PANCAKE_SUB-")
+
+	// C1：先按通道侧订单号 ORD_* 做跨表认领，同一笔支付不允许既算订阅又算充值
+	if claimErr := model.ClaimPaymentTradeNo(model.PaymentProviderWaffoPancake, event.Data.OrderID, rawTradeNo, "auto"); claimErr != nil {
+		if errors.Is(claimErr, model.ErrPaymentTradeNoConflict) {
+			logger.LogWarn(c.Request.Context(), common.LogText("Waffo Pancake payment already claimed by another order, skipped trade_no=%s order_id=%s", rawTradeNo, event.Data.OrderID))
+			c.String(http.StatusOK, "OK")
+			return
+		}
+		logger.LogError(c.Request.Context(), common.LogText("Waffo Pancake payment claim failed trade_no=%s order_id=%s error=%q", rawTradeNo, event.Data.OrderID, claimErr.Error()))
+		c.String(http.StatusInternalServerError, "retry")
+		return
+	}
 
 	if isSubscription {
 		tradeNo, err := service.ResolveWaffoPancakeSubscriptionTradeNo(event)

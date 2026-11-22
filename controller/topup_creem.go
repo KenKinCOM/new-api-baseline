@@ -308,6 +308,18 @@ func handleCheckoutCompleted(c *gin.Context, event *CreemWebhookEvent) {
 		return
 	}
 
+	// C1：先按通道侧订单号做跨表认领，同一笔支付不允许既算订阅又算充值
+	if claimErr := model.ClaimPaymentTradeNo(model.PaymentProviderCreem, event.Object.Order.Id, referenceId, "auto"); claimErr != nil {
+		if errors.Is(claimErr, model.ErrPaymentTradeNoConflict) {
+			logger.LogWarn(c.Request.Context(), common.LogText("Creem payment already claimed by another order, skipped trade_no=%s creem_order_id=%s", referenceId, event.Object.Order.Id))
+			c.Status(http.StatusOK)
+			return
+		}
+		logger.LogError(c.Request.Context(), common.LogText("Creem payment claim failed trade_no=%s creem_order_id=%s error=%q", referenceId, event.Object.Order.Id, claimErr.Error()))
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
 	// Try complete subscription order first
 	LockOrder(referenceId)
 	defer UnlockOrder(referenceId)
