@@ -66,6 +66,9 @@ type textQuotaSummary struct {
 	ToolSurchargeItems     []ToolSurchargeItem
 	ToolCallSurchargeQuota decimal.Decimal
 	FixedPriceBilling      bool
+	// UsageMissing is set when the upstream returned no billable usage and the
+	// charge was therefore computed from the estimated prompt tokens.
+	UsageMissing bool
 }
 
 // hasBillableUsage reports whether this request should incur any charge.
@@ -78,6 +81,39 @@ func (s *textQuotaSummary) hasBillableUsage() bool {
 		(s.IsClaudeUsageSemantic && (s.CacheTokens > 0 || s.CacheCreationTokens > 0 ||
 			s.CacheCreationTokens5m > 0 || s.CacheCreationTokens1h > 0)) ||
 		!s.ToolCallSurchargeQuota.IsZero()
+}
+
+// usageHasNoBillableTokens reports whether the upstream usage carries nothing
+// that could be billed. An absent usage and an all-zero usage mean the same
+// thing to the ledger, so both are treated as missing.
+func usageHasNoBillableTokens(usage *dto.Usage) bool {
+	if usage == nil {
+		return true
+	}
+	if usage.PromptTokens != 0 || usage.CompletionTokens != 0 {
+		return false
+	}
+	details := usage.PromptTokensDetails
+	return details.CachedTokens == 0 &&
+		details.CacheCreationTokensTotal() == 0 &&
+		details.ImageTokens == 0 &&
+		details.AudioTokens == 0 &&
+		usage.ClaudeCacheCreation5mTokens == 0 &&
+		usage.ClaudeCacheCreation1hTokens == 0
+}
+
+// hasToolCallSurchargeCandidate reports whether this request may be billed for
+// a tool call without any tokens. Those requests legitimately report no usage
+// and must not be replaced by an estimated-token charge.
+func hasToolCallSurchargeCandidate(relayInfo *relaycommon.RelayInfo, modelName string) bool {
+	if relayInfo != nil && relayInfo.ResponsesUsageInfo != nil {
+		for _, tool := range relayInfo.ResponsesUsageInfo.BuiltInTools {
+			if tool != nil && tool.CallCount > 0 {
+				return true
+			}
+		}
+	}
+	return modelName != "" && strings.HasSuffix(modelName, "search-preview")
 }
 
 func cacheWriteTokensTotal(summary textQuotaSummary) int {
@@ -245,12 +281,23 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	}
 	summary.IsClaudeUsageSemantic = summary.UsageSemantic == "anthropic"
 
-	if usage == nil {
-		usage = &dto.Usage{
-			PromptTokens:     relayInfo.GetEstimatePromptTokens(),
-			CompletionTokens: 0,
-			TotalTokens:      relayInfo.GetEstimatePromptTokens(),
+	// G-09: an absent usage object is only one shape of "upstream told us
+	// nothing". An all-zero usage has the same meaning, and settling it as 0
+	// made the whole request free. Fall back to the estimated prompt tokens in
+	// both cases (but never for requests that can be billed by tool call
+	// alone) and flag the charge on the log as estimated.
+	if usageHasNoBillableTokens(usage) && !hasToolCallSurchargeCandidate(relayInfo, summary.ModelName) {
+		if estimated := relayInfo.GetEstimatePromptTokens(); estimated > 0 {
+			usage = &dto.Usage{
+				PromptTokens: estimated,
+				TotalTokens:  estimated,
+			}
+			summary.UsageMissing = true
 		}
+	}
+	if usage == nil {
+		// Tool-call-only requests can legitimately arrive without usage.
+		usage = &dto.Usage{}
 	}
 
 	summary.PromptTokens = usage.PromptTokens
@@ -459,6 +506,10 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		extraContent = append(extraContent, common.NewMessage("Upstream returned no usage, so nothing was charged (possibly an upstream timeout)"))
 		logger.LogError(ctx, common.LogText("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
 	} else {
+		if summary.UsageMissing {
+			// G-09: say explicitly that the charge is estimated, not measured.
+			extraContent = append(extraContent, common.NewMessage("Upstream returned no usage; charged {{quota}} from the estimated input tokens", map[string]any{"quota": logger.FormatQuota(summary.Quota)}))
+		}
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, summary.Quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
 	}
@@ -491,6 +542,10 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other = GenerateTextOtherInfo(ctx, relayInfo, summary.ModelRatio, summary.GroupRatio, summary.CompletionRatio, summary.CacheTokens, summary.CacheRatio, summary.ModelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	}
 	appendUsageBillingPathForLog(other, common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens), originUsage)
+	if summary.UsageMissing {
+		// G-09: the charge came from the estimate, not from measured usage.
+		other.SetPublic("usage_missing", true)
+	}
 	if adminRejectReason != "" {
 		other.SetAdmin("reject_reason", adminRejectReason)
 	}
