@@ -370,6 +370,14 @@ func InitResources() error {
 	}
 	model.InitOptionMap()
 
+	// G-11: disabling the consume log is a ledger-affecting configuration. Make
+	// it loud at startup instead of discovering it when a bill cannot be
+	// recomputed (charges still go through; every record then only exists in
+	// the backend log).
+	if !common.LogConsumeEnabled {
+		common.SysError(common.LogText("LogConsumeEnabled=false: consume logs are NOT written to the logs table. Charges still apply and are only recoverable from the backend log. Enable it unless this is intentional."))
+	}
+
 	// 清理旧的磁盘缓存文件
 	common.CleanupOldCacheFiles()
 
