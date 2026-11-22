@@ -340,12 +340,26 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 	return nil
 }
 
-// topUpQueryWindowSeconds 限制充值记录查询的时间窗口（秒）。
-const topUpQueryWindowSeconds int64 = 30 * 24 * 60 * 60
+// topUpQueryWindowSeconds 限制用户侧充值记录查询的时间窗口（秒）。
+//
+// L4：此前硬编码 30 天，跨月争议用户无法自助核对。现在默认 180 天（可跨月），
+// 并可用环境变量 TOPUP_QUERY_WINDOW_DAYS 调整；设为 0 或负数表示不限制。
+func topUpQueryWindowSeconds() int64 {
+	days := common.GetEnvOrDefault("TOPUP_QUERY_WINDOW_DAYS", 180)
+	if days <= 0 {
+		return 0
+	}
+	return int64(days) * 24 * 60 * 60
+}
 
 // topUpQueryCutoff 返回允许查询的最早 create_time（秒级 Unix 时间戳）。
+// 返回 0 表示不限制起始时间。
 func topUpQueryCutoff() int64 {
-	return common.GetTimestamp() - topUpQueryWindowSeconds
+	window := topUpQueryWindowSeconds()
+	if window <= 0 {
+		return 0
+	}
+	return common.GetTimestamp() - window
 }
 
 func GetUserTopUps(userId int, pageInfo *common.PageInfo) (topups []*TopUp, total int64, err error) {
