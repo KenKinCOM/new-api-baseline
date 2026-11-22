@@ -94,7 +94,11 @@ func TestBillingReconcileBaselineOnly(t *testing.T) {
 	assert.Equal(t, int64(100), summary.UsersCumulativeQuota)
 	assert.Equal(t, int64(100), summary.ChannelsCumulativeQuota)
 	assert.ElementsMatch(t, []string{BillingReconcileScopeUser, BillingReconcileScopeChannel}, summary.MissingSides)
-	assert.Equal(t, int64(2), countBillingReconcileRows(t, &BillingReconcileSnapshot{}))
+	// users + channels 各一行，外加一行 meta 时间戳标记
+	assert.Equal(t, int64(3), countBillingReconcileRows(t, &BillingReconcileSnapshot{}))
+	var metaCount int64
+	require.NoError(t, DB.Model(&BillingReconcileSnapshot{}).Where("scope = ?", billingReconcileScopeMeta).Count(&metaCount).Error)
+	assert.Equal(t, int64(1), metaCount, "空系统也要留下本轮时间戳，否则下一轮会再次判定为首次运行")
 	assert.Equal(t, int64(0), countBillingReconcileRows(t, &BillingReconcileDiff{}), "基线轮不应产差异行")
 }
 

@@ -55,6 +55,7 @@ const (
 	BillingReconcileKindSideMissing      = "side_missing"
 	billingReconcileScopeDaily           = "daily"
 	billingReconcileScopeCumulative      = "cumulative"
+	billingReconcileScopeMeta            = "meta"
 	billingReconcileMaxDetailRows        = 200
 	billingReconcileMissingBaselineNote  = "首次运行：已建立基线快照，本期不做一致/不一致判定"
 	billingReconcileRetentionCutoffGrace = 1
@@ -563,6 +564,14 @@ func saveBillingReconcileSnapshot(summary *BillingReconcileSummary, users, chann
 	}
 	appendRows(BillingReconcileScopeUser, users)
 	appendRows(BillingReconcileScopeChannel, channels)
+	// 元数据行：即使系统里一个非零实体都没有，也要留下本轮的时间戳，
+	// 否则 MAX(taken_at)=0 会让下一轮误判成「首次运行」，永远建立不了基线。
+	rows = append(rows, BillingReconcileSnapshot{
+		RunDate:  summary.RunDate,
+		Scope:    billingReconcileScopeMeta,
+		EntityId: 0,
+		TakenAt:  takenAt,
+	})
 
 	if len(rows) > 0 {
 		if err := DB.CreateInBatches(rows, 200).Error; err != nil {
