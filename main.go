@@ -199,11 +199,18 @@ func main() {
 
 	host := os.Getenv("HOST")
 	if os.Getenv("ENABLE_PPROF") == "true" {
+		// pprof exposes goroutine dumps and memory contents; it must never be
+		// reachable from the network by default. Default to loopback and require
+		// an explicit PPROF_ADDR to widen it (T4 §4.5 #15 / C-10).
+		pprofAddr := os.Getenv("PPROF_ADDR")
+		if pprofAddr == "" {
+			pprofAddr = "127.0.0.1:8005"
+		}
 		gopool.Go(func() {
-			log.Println(http.ListenAndServe(net.JoinHostPort(host, "8005"), nil))
+			log.Println(http.ListenAndServe(pprofAddr, nil))
 		})
 		go common.Monitor()
-		common.SysLog(common.LogText("pprof enabled"))
+		common.SysLog(common.LogText("pprof enabled on %s (keep it off the public network)", pprofAddr))
 	}
 
 	err = common.StartPyroScope()
