@@ -384,6 +384,8 @@ func migrateDB() error {
 		&PaymentTradeNoClaim{},
 		&WebhookEvent{},
 		&TopUpReconcileDiff{},
+		&BillingReconcileSnapshot{},
+		&BillingReconcileDiff{},
 		&CasbinRule{},
 		&AuthzRole{},
 		&UserAccessToken{},
