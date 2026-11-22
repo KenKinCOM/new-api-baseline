@@ -119,6 +119,13 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		other.SetPublic("is_model_mapped", true)
 		other.SetPublic("upstream_model_name", relayInfo.UpstreamModelName)
 	}
+	// G-01: PriceData's extra ratios (per-call duration, resolution, image
+	// count "n", ...) are multiplied into the charge, but only ever existed in
+	// memory. Record the individual factors so a fixed-price or multi-image
+	// charge can be recomputed from the log alone.
+	if ratios := relayInfo.PriceData.OtherRatios(); len(ratios) > 0 {
+		other.SetPublic("other_ratios", ratios)
+	}
 
 	isSystemPromptOverwritten := common.GetContextKeyBool(ctx, constant.ContextKeySystemPromptOverride)
 	if isSystemPromptOverwritten {
@@ -338,6 +345,9 @@ func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData hosttypes.P
 	other.SetPublic("group_ratio", priceData.GroupRatioInfo.GroupRatio)
 	if priceData.GroupRatioInfo.HasSpecialRatio {
 		other.SetPublic("user_group_ratio", priceData.GroupRatioInfo.GroupSpecialRatio)
+	}
+	if ratios := priceData.OtherRatios(); len(ratios) > 0 {
+		other.SetPublic("other_ratios", ratios)
 	}
 	appendRequestPath(nil, relayInfo, other)
 	appendRequestPluginRecord(relayInfo, other)
