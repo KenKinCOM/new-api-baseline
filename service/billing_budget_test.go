@@ -161,3 +161,14 @@ func TestBillingSessionBudgetEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, quotaBefore, quotaAfter, "预算拒绝时不能动用户余额")
 }
+
+// G-06：预估为 0（免费模型）但结算算出实际花费时，实际消费仍要进预算账。
+func TestBillingSessionBudgetSettleWithoutReservation(t *testing.T) {
+	token := insertBudgetToken(t, 100, model.TokenBudgetPeriodDaily)
+	session := newBudgetTestSession(token) // 没有走过预扣，budgetChecked=false
+
+	require.NoError(t, session.settleTokenBudget(30))
+	stored, err := model.GetTokenBudgetState(token.Id)
+	require.NoError(t, err)
+	assert.Equal(t, 30, stored.Used)
+}

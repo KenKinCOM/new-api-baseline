@@ -116,11 +116,17 @@ func (s *BillingSession) reserveTokenBudget(amount int) *types.NewAPIError {
 // 之后的请求会在预扣前判定处被拒绝。
 func (s *BillingSession) settleTokenBudget(actualQuota int) error {
 	info := s.relayInfo
-	if info == nil || info.IsPlayground || info.TokenId <= 0 || !s.budgetEnabled {
+	if info == nil || info.IsPlayground || info.TokenId <= 0 {
 		return nil
 	}
 	delta := actualQuota - s.budgetReserved
 	if delta == 0 {
+		return nil
+	}
+	// budgetChecked 且没启用预算：已确认该令牌没有预算，省掉一次查询。
+	// 未确认时（预估值就是 0，例如免费模型，但结算算出了实际花费）仍要补记一次，
+	// 否则这类请求的实际消费不会进入预算账。
+	if s.budgetChecked && !s.budgetEnabled {
 		return nil
 	}
 	state, err := model.AddTokenBudgetUsage(info.TokenId, delta)
@@ -128,6 +134,9 @@ func (s *BillingSession) settleTokenBudget(actualQuota int) error {
 		return err
 	}
 	s.budgetReserved = actualQuota
+	if state != nil && state.Enabled() {
+		s.budgetEnabled = true
+	}
 	if state != nil && state.Enabled() && state.Used > state.Quota {
 		common.SysLog(common.LogText(
 			"ALERT token budget exceeded after settlement: token=%d period=%s used=%d limit=%d request=%s",
