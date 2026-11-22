@@ -26,6 +26,11 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/setup", controller.GetSetup)
 		apiRouter.POST("/setup", anonymousRequestBodyLimit, controller.PostSetup)
 		apiRouter.GET("/status", controller.GetStatus)
+		// Anonymous liveness/readiness probes for ALB / ECS / K8s.
+		// /api/status above does not verify the database, so it must not be used
+		// as a readiness signal (T4 §3.3). /api/readyz does, without AdminAuth.
+		apiRouter.GET("/healthz", controller.Healthz)
+		apiRouter.GET("/readyz", controller.Readyz)
 		apiRouter.GET("/uptime/status", controller.GetUptimeKumaStatus)
 		apiRouter.GET("/models", middleware.UserAuth(), controller.DashboardListModels)
 		apiRouter.GET("/status/test", middleware.AdminAuth(), controller.TestStatus)
