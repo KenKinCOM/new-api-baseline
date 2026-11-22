@@ -412,6 +412,12 @@ func handleWaffoPayment(c *gin.Context, wh *core.WebhookHandler, result *core.Pa
 	defer UnlockOrder(merchantOrderId)
 
 	if err := model.RechargeWaffo(merchantOrderId, c.ClientIP()); err != nil {
+		// C2：已入账成功的订单重复回调统一回成功，避免通道无限重试
+		if model.IsTopUpAlreadySettled(merchantOrderId) {
+			logger.LogInfo(c.Request.Context(), common.LogText("Waffo duplicate callback on settled order, answered success trade_no=%s client_ip=%s", merchantOrderId, c.ClientIP()))
+			sendWaffoWebhookResponse(c, wh, true, "")
+			return
+		}
 		logger.LogError(c.Request.Context(), common.LogText("Waffo top-up processing failed trade_no=%s client_ip=%s error=%q", merchantOrderId, c.ClientIP(), err.Error()))
 		sendWaffoWebhookResponse(c, wh, false, err.Error())
 		return

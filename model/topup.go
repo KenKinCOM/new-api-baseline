@@ -151,6 +151,17 @@ func GetTopUpByTradeNo(tradeNo string) *TopUp {
 	return topUp
 }
 
+// IsTopUpAlreadySettled 判断该订单是否已经入账成功（C2）。
+// 用于统一「重复回调」的响应语义：已成功的订单重复回调应回成功，让通道停止重试，
+// 且不再产生第二次入账。
+func IsTopUpAlreadySettled(tradeNo string) bool {
+	if tradeNo == "" {
+		return false
+	}
+	topUp := GetTopUpByTradeNo(tradeNo)
+	return topUp != nil && topUp.Status == common.TopUpStatusSuccess
+}
+
 // SetTopUpProviderTradeNo 记录通道侧流水号（R3）。各通道回调成功后调用，
 // 用于与通道后台逐笔对号。只更新元数据，写失败仅记日志，不影响入账结果。
 func SetTopUpProviderTradeNo(tradeNo string, providerTradeNo string) {

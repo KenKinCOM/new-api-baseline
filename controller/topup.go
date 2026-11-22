@@ -486,6 +486,12 @@ func EpayNotify(c *gin.Context) {
 			default:
 				logger.LogError(c.Request.Context(), common.LogText("Epay top-up processing failed trade_no=%s client_ip=%s error=%q", verifyInfo.ServiceTradeNo, c.ClientIP(), err.Error()))
 			}
+			// C2：已入账成功的订单重复回调统一回 success，避免通道无限重试
+			if model.IsTopUpAlreadySettled(verifyInfo.ServiceTradeNo) {
+				logger.LogInfo(c.Request.Context(), common.LogText("Epay duplicate callback on settled order, answered success trade_no=%s client_ip=%s", verifyInfo.ServiceTradeNo, c.ClientIP()))
+				_, _ = c.Writer.Write([]byte("success"))
+				return
+			}
 			if _, writeErr := c.Writer.Write([]byte("fail")); writeErr != nil {
 				logger.LogError(c.Request.Context(), common.LogText("Epay webhook failed to write response trade_no=%s client_ip=%s error=%q", verifyInfo.ServiceTradeNo, c.ClientIP(), writeErr.Error()))
 			}
