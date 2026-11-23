@@ -72,6 +72,9 @@ func SetRelayRouter(router *gin.Engine) {
 	relayV1Router.Use(middleware.RouteTag("relay"))
 	relayV1Router.Use(middleware.SystemPerformanceCheck())
 	relayV1Router.Use(middleware.TokenAuth())
+	// G-07: 客户端幂等键。放在 TokenAuth 之后（幂等域要用户+令牌），
+	// 放在限流/渠道选择之前（回放的重复请求不应该再消耗限流额度或打上游）。
+	relayV1Router.Use(middleware.ClientIdempotencyKey())
 	{
 		// Responses WebSocket route. Channel selection happens after the first
 		// response.create event; each event runs the ordinary request limiter.
@@ -211,6 +214,8 @@ func SetRelayRouter(router *gin.Engine) {
 	relayGeminiRouter.Use(middleware.RouteTag("relay"))
 	relayGeminiRouter.Use(middleware.SystemPerformanceCheck())
 	relayGeminiRouter.Use(middleware.TokenAuth())
+	// G-07: 客户端幂等键（Gemini 原生协议同样按请求扣费）。
+	relayGeminiRouter.Use(middleware.ClientIdempotencyKey())
 	relayGeminiRouter.Use(middleware.ModelRequestRateLimit())
 	relayGeminiRouter.Use(middleware.Distribute())
 	{
