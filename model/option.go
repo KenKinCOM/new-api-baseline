@@ -217,7 +217,14 @@ func LoadOptionsFromDatabase() error {
 			passkeyOptions[option.Key] = option.Value
 			continue
 		}
-		err := updateOptionMap(option.Key, option.Value)
+		value, err := decryptOptionValueForRead(option.Key, option.Value)
+		if err != nil {
+			// A credential that cannot be decrypted is a hard configuration
+			// error: fail loud instead of running with an empty key.
+			common.SysError(common.LogText("failed to decrypt option: %s", err.Error()))
+			continue
+		}
+		err = updateOptionMap(option.Key, value)
 		if err != nil {
 			common.SysLog(common.LogText("failed to update option map: %s", err.Error()))
 		}
@@ -305,7 +312,11 @@ func UpdateOption(key string, value string) error {
 	}
 	// https://gorm.io/docs/update.html#Save-All-Fields
 	DB.FirstOrCreate(&option, Option{Key: key})
-	option.Value = value
+	storedValue, err := encryptOptionValueForStorage(key, value)
+	if err != nil {
+		return err
+	}
+	option.Value = storedValue
 	// Save is a combination function.
 	// If save value does not contain primary key, it will execute Create,
 	// otherwise it will execute Update (with all fields).
@@ -361,7 +372,11 @@ func UpdateOptionsBulk(values map[string]string) error {
 			if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
 				return err
 			}
-			option.Value = v
+			storedValue, err := encryptOptionValueForStorage(k, v)
+			if err != nil {
+				return err
+			}
+			option.Value = storedValue
 			if err := tx.Save(&option).Error; err != nil {
 				return err
 			}
