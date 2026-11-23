@@ -91,7 +91,11 @@ func RefreshCodexChannelCredential(ctx context.Context, channelID int, opts Code
 		return nil, nil, err
 	}
 
-	if err := model.DB.Model(&model.Channel{}).Where("id = ?", ch.Id).Update("key", string(encoded)).Error; err != nil {
+	encryptedKey, err := common.EncryptSecret(string(encoded))
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := model.DB.Model(&model.Channel{}).Where("id = ?", ch.Id).Update("key", encryptedKey).Error; err != nil {
 		return nil, nil, err
 	}
 	model.BumpSyncTopic(model.SyncTopicChannels)
