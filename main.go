@@ -167,6 +167,10 @@ func main() {
 	// Subscription quota reset task (daily/weekly/monthly/custom)
 	service.StartSubscriptionQuotaResetTask()
 
+	// G-07: purge expired client idempotency keys so the table cannot grow
+	// without bound. Cleanup interval comes from idempotency_setting.
+	service.StartIdempotencyKeyCleanup()
+
 	// Report this process as a system instance so the System Info page can show
 	// all currently alive nodes in multi-instance deployments.
 	service.StartSystemInstanceReporter()

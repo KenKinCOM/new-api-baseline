@@ -193,6 +193,15 @@ func DeleteIdempotencyKey(id int64) error {
 	return DB.Where("id = ?", id).Delete(&IdempotencyKey{}).Error
 }
 
+// ReleasePendingIdempotencyKey 释放一次失败请求持有的键。
+//
+// 条件里带 status=pending 与 request_digest：如果这一行的租约已经过期并被
+// 下一个请求接管（digest 变了），这里就不会误删别人的登记。
+func ReleasePendingIdempotencyKey(id int64, digest string) error {
+	return DB.Where("id = ? AND status = ? AND request_digest = ?", id, IdempotencyStatusPending, digest).
+		Delete(&IdempotencyKey{}).Error
+}
+
 // PurgeExpiredIdempotencyKeys 分批删除已过期的行，返回删除总数。
 //
 // 分批是为了不在一次 DELETE 里锁住大表：每批最多 batch 行，直到没有可删的。
