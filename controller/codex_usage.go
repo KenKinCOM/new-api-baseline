@@ -132,7 +132,10 @@ func fetchCodexChannelWhamData(
 
 			encoded, encErr := common.Marshal(oauthKey)
 			if encErr == nil {
-				if model.DB.Model(&model.Channel{}).Where("id = ?", ch.Id).Update("key", string(encoded)).Error == nil {
+				storedKey, keyErr := common.EncryptSecret(string(encoded))
+				if keyErr != nil {
+					common.SysError(common.LogText("encrypt refreshed codex key for channel %d: %s", ch.Id, keyErr.Error()))
+				} else if model.DB.Model(&model.Channel{}).Where("id = ?", ch.Id).Update("key", storedKey).Error == nil {
 					model.BumpSyncTopic(model.SyncTopicChannels)
 				}
 				model.InitChannelCache()

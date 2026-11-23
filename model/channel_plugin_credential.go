@@ -68,7 +68,11 @@ func UpdateChannelLocked(channelID int, update func(channel *Channel) error) (*C
 		channel.Keys = nil
 		updates := map[string]any{}
 		if channel.Key != key {
-			updates["key"], keyChanged = channel.Key, true
+			encrypted, err := channelKeyForWrite(channel.Key)
+			if err != nil {
+				return nil, err
+			}
+			updates["key"], keyChanged = encrypted, true
 		}
 		if channel.Status != status {
 			updates["status"], statusChanged = channel.Status, true
@@ -96,7 +100,19 @@ func UpdateChannelLocked(channelID int, update func(channel *Channel) error) (*C
 			return nil, err
 		}
 		if len(updates) > 0 {
-			result := DB.Model(&Channel{}).Where("id = ?", channelID).Where(map[string]any{"key": stored}).Updates(updates)
+			guardValues, err := channelKeyMatchValues(stored)
+			if err != nil {
+				return nil, err
+			}
+			guarded := DB.Model(&Channel{}).Where("id = ?", channelID)
+			for i, value := range guardValues {
+				if i == 0 {
+					guarded = guarded.Where(map[string]any{"key": value})
+					continue
+				}
+				guarded = guarded.Or(map[string]any{"key": value})
+			}
+			result := guarded.Updates(updates)
 			if result.Error != nil {
 				return nil, result.Error
 			}
@@ -177,8 +193,12 @@ func UpdateTaskPluginChannelLocked(channelID int, update func(channel *Channel, 
 		}
 		statusChanged, enabled = target.Status != status, target.Status == common.ChannelStatusEnabled
 		target.Keys = nil
+		encryptedKey, err := channelKeyForWrite(target.Key)
+		if err != nil {
+			return err
+		}
 		updates := map[string]any{
-			"key":          target.Key,
+			"key":          encryptedKey,
 			"status":       target.Status,
 			"other_info":   target.OtherInfo,
 			"channel_info": target.ChannelInfo,
@@ -266,7 +286,11 @@ func UpdateScheduledChannelLocked(ctx context.Context, channelID int, update fun
 		channel.Keys = nil
 		updates := map[string]any{}
 		if channel.Key != key {
-			updates["key"], keyChanged = channel.Key, true
+			encrypted, err := channelKeyForWrite(channel.Key)
+			if err != nil {
+				return err
+			}
+			updates["key"], keyChanged = encrypted, true
 		}
 		if channel.Status != status {
 			updates["status"], statusChanged = channel.Status, true
